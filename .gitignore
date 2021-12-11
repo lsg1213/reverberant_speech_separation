@@ -1,2 +1,4 @@
 /**/*.pt
 /**/__*
+/**/tensorboard_log
+/**/*.event
