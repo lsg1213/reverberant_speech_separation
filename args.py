@@ -14,7 +14,7 @@ def get_args():
     args.add_argument('--segment', type=int, default=3)
     args.add_argument('--lr', type=float, default=1e-3)
     args.add_argument('--sr', type=int, default=8000, choices=[8000, 16000])
-    args.add_argument('--tensorboard_path', type=str, default='/tensorboard_log')
+    args.add_argument('--tensorboard_path', type=str, default='tensorboard_log')
     args.add_argument('--gpus', type=str, default='-1')
     args.add_argument('--task', type=str, default='sep_clean', choices=['sep_clean'])
     args.add_argument('--resume', action='store_true')
