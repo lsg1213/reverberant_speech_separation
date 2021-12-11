@@ -2,6 +2,7 @@ from glob import glob
 import os
 import torchaudio
 import torch
+from torch.nn.functional import *
 
 
 def get_dataset(config):
@@ -38,9 +39,15 @@ class Wave_dataset(torch.utils.data.Dataset):
         s1 = torchaudio.load(self.s1[idx])[0]
         s2 = torchaudio.load(self.s2[idx])[0]
 
-        idx = torch.randint(0, mix.shape[-1] - self.config.sr * self.config.segment, ())
+        if mix.shape[-1] - self.config.sr * self.config.segment < 0:
+            idx = 0
+        else:
+            idx = torch.randint(0, mix.shape[-1] - self.config.sr * self.config.segment, ())
         mix = mix[..., idx: idx + self.config.sr * self.config.segment]
         s1 = s1[..., idx: idx + self.config.sr * self.config.segment]
         s2 = s2[..., idx: idx + self.config.sr * self.config.segment]
+        mix = pad(mix, (0, self.config.sr * self.config.segment - mix.shape[-1]))
+        s1 = pad(s1, (0, self.config.sr * self.config.segment - mix.shape[-1]))
+        s2 = pad(s2, (0, self.config.sr * self.config.segment - mix.shape[-1]))
         return mix, (s1, s2)
         
