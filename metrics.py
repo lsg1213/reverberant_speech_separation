@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from mir_eval.separation import bss_eval_sources
 
 
@@ -57,4 +58,28 @@ def cal_SISNR(ref_sig, out_sig, eps=1e-8):
     ratio = np.sum(proj ** 2) / (np.sum(noise ** 2) + eps)
     sisnr = 10 * np.log(ratio + eps) / np.log(10.0)
     return sisnr
+
+
+def call_SISDR(targets, est_targets):
+    EPS = 1e-8
+    assert targets.size() == est_targets.size()
+    # Step 1. Zero-mean norm
+    mean_source = torch.mean(targets, dim=2, keepdim=True)
+    mean_estimate = torch.mean(est_targets, dim=2, keepdim=True)
+    targets = targets - mean_source
+    est_targets = est_targets - mean_estimate
+    # Step 2. Pair-wise SI-SDR.
+    # [batch, n_src]
+    pair_wise_dot = torch.sum(est_targets * targets, dim=2, keepdim=True)
+    # [batch, n_src]
+    s_target_energy = torch.sum(targets ** 2, dim=2, keepdim=True) + EPS
+    # [batch, n_src, time]
+    scaled_targets = pair_wise_dot * targets / s_target_energy
+    e_noise = est_targets - scaled_targets
+    # [batch, n_src]
+    pair_wise_sdr = torch.sum(scaled_targets ** 2, dim=2) / (
+        torch.sum(e_noise ** 2, dim=2) + EPS
+    )
+    pair_wise_sdr = 10 * torch.log10(pair_wise_sdr + EPS)
+    return -torch.mean(pair_wise_sdr, dim=-1).mean()
     
