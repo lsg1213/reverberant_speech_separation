@@ -39,7 +39,7 @@ class Wave_dataset(torch.utils.data.Dataset):
         s1 = torchaudio.load(self.s1[idx])[0]
         s2 = torchaudio.load(self.s2[idx])[0]
 
-        if mix.shape[-1] - self.config.sr * self.config.segment < 0:
+        if mix.shape[-1] - self.config.sr * self.config.segment <= 0:
             idx = 0
         else:
             idx = torch.randint(0, mix.shape[-1] - self.config.sr * self.config.segment, ())
