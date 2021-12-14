@@ -45,10 +45,10 @@ def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: tor
             optimizer.step()
         sisdris.append(sisdri.detach().cpu().numpy())
         losses.append(loss.detach().cpu().numpy())
-        pbar.set_postfix({'epoch': epoch, 'mode': mode, 'loss': np.stack(losses).mean(), 'SI-SDRI': np.concatenate(sisdris).mean()})
+        pbar.set_postfix({'epoch': epoch, 'mode': mode, 'loss': np.stack(losses).mean(), 'SI-SDRI': np.stack(sisdris).mean()})
 
     
-    return np.stack(losses).mean(), np.concatenate(sisdris).mean()
+    return np.stack(losses).mean(), np.stack(sisdris).mean()
 
 
 def main(config):
