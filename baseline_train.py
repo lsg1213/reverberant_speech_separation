@@ -35,18 +35,20 @@ def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: tor
         logits = model(mix)
         loss = criterion(torch.cat([s1, s2], 1), logits)
         
+        sisdri = loss.detach().cpu()
+        loss = loss.mean()
         # sisdri = get_sisdri(mix, torch.cat([s1, s2], 1), logits)
-        sisdri = torch.stack(list(map(cal_SDRi, torch.cat([s1, s2], 1)[-1:], logits[-1:], torch.cat([mix, mix], 1)[-1:])))
+        # sisdri = torch.stack(list(map(cal_SDRi, torch.cat([s1, s2], 1)[-1:], logits[-1:], torch.cat([mix, mix], 1)[-1:])))
         if mode == 'train':
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             optimizer.step()
         sisdris.append(sisdri.detach().cpu().numpy())
         losses.append(loss.detach().cpu().numpy())
-        pbar.set_postfix({'epoch': epoch, 'mode': mode, 'loss': np.stack(losses).mean(), 'SI-SDRI': np.stack(sisdris).mean()})
+        pbar.set_postfix({'epoch': epoch, 'mode': mode, 'loss': np.stack(losses).mean(), 'SI-SDRI': np.concatenate(sisdris).mean()})
 
     
-    return np.stack(losses).mean(), np.stack(sisdris).mean()
+    return np.stack(losses).mean(), np.concatenate(sisdris).mean()
 
 
 def main(config):
