@@ -22,7 +22,7 @@ from asteroid.losses import pairwise_neg_sisdr, PITLossWrapper
 
 
 def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: torch.optim.Optimizer=None, mode='train', device=torch.device('cpu')):
-    max_norm = 5
+    max_value = 5.
     losses = []
     sisdris = []
     for mix, (s1, s2) in pbar:
@@ -41,7 +41,7 @@ def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: tor
         # sisdri = torch.stack(list(map(cal_SDRi, torch.cat([s1, s2], 1)[-1:], logits[-1:], torch.cat([mix, mix], 1)[-1:])))
         if mode == 'train':
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            torch.nn.utils.clip_grad_value_(model.parameters(), max_value)
             optimizer.step()
         sisdris.append(sisdri.detach().cpu().numpy())
         losses.append(loss.detach().cpu().numpy())
@@ -71,7 +71,7 @@ def main(config):
     testloader = DataLoader(testset, batch_size=config.batch, num_workers=10)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
-    lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5, verbose=True)
+    lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=5, verbose=True)
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     init_epoch = 0
     patience = 0
