@@ -35,7 +35,7 @@ def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: tor
         logits = model(mix)
         loss = criterion(torch.cat([s1, s2], 1), logits)
         
-        sisdri = loss.detach().cpu()
+        sisdri = - loss.detach().cpu()
         loss = loss.mean()
         # sisdri = get_sisdri(mix, torch.cat([s1, s2], 1), logits)
         # sisdri = torch.stack(list(map(cal_SDRi, torch.cat([s1, s2], 1)[-1:], logits[-1:], torch.cat([mix, mix], 1)[-1:])))
