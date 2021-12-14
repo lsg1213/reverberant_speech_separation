@@ -13,12 +13,19 @@ def cal_SDRi(src_ref, src_est, mix):
     Returns:
         average_SDRi
     """
-    src_anchor = np.stack([mix, mix], axis=0)
+    if not isinstance(src_ref, np.ndarray):
+        src_ref = src_ref.detach().cpu().numpy()
+    if not isinstance(src_est, np.ndarray):
+        src_est = src_est.detach().cpu().numpy()
+    if not isinstance(mix, np.ndarray):
+        mix = mix.detach().cpu().numpy()
+
+    src_anchor = mix
     sdr, sir, sar, popt = bss_eval_sources(src_ref, src_est)
     sdr0, sir0, sar0, popt0 = bss_eval_sources(src_ref, src_anchor)
     avg_SDRi = ((sdr[0]-sdr0[0]) + (sdr[1]-sdr0[1])) / 2
     # print("SDRi1: {0:.2f}, SDRi2: {1:.2f}".format(sdr[0]-sdr0[0], sdr[1]-sdr0[1]))
-    return avg_SDRi
+    return torch.tensor((avg_SDRi))
 
 
 def cal_SISNRi(src_ref, src_est, mix):
@@ -60,7 +67,7 @@ def cal_SISNR(ref_sig, out_sig, eps=1e-8):
     return sisnr
 
 
-def call_SISDR(targets, est_targets):
+def call_SISDR(targets, est_targets, use_as_loss=True):
     EPS = 1e-8
     assert targets.size() == est_targets.size()
     # Step 1. Zero-mean norm
@@ -81,5 +88,13 @@ def call_SISDR(targets, est_targets):
         torch.sum(e_noise ** 2, dim=2) + EPS
     )
     pair_wise_sdr = 10 * torch.log10(pair_wise_sdr + EPS)
-    return -torch.mean(pair_wise_sdr, dim=-1).mean()
+    if use_as_loss:
+        return - torch.mean(pair_wise_sdr, dim=-1).mean()
+    else:
+        return torch.mean(pair_wise_sdr, dim=-1)
     
+
+def get_sisdri(mix, src_ref, src_est):
+    sdr = call_SISDR(src_ref, src_est, use_as_loss=False)
+    sdr0 = call_SISDR(src_ref, torch.cat([mix, mix], 1), use_as_loss=False)
+    return  (sdr - sdr0).mean()
