@@ -15,7 +15,7 @@ from dataset import get_dataset
 from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
-from asteroid.losses.sdr import MultiSrcNegSDR
+from asteroid.losses import pairwise_neg_sisdr
 '''
     dataset: https://github.com/JorisCos/LibriMix.git
 '''
@@ -72,7 +72,7 @@ def main(config):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5, verbose=True)
-    criterion = MultiSrcNegSDR('sisdr')
+    criterion = pairwise_neg_sisdr
     init_epoch = 0
     patience = 0
     best_score = 0.
