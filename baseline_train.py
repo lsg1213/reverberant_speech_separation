@@ -75,6 +75,7 @@ def main(config):
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     init_epoch = 0
     patience = 0
+    early_patience = 0
     best_score = 0.
     if config.resume:
         resume = torch.load(f'{config.name}.pt')
@@ -84,9 +85,10 @@ def main(config):
         optimizer.load_state_dict(resume['opt'])
         lr_schedule.load_state_dict(resume['lr_schedule'])
         patience = resume['patience']
+        early_patience = resume['early_patience']
 
     for epoch in range(init_epoch, config.epoch):
-        if patience == config.max_patience:
+        if early_patience == config.max_patience:
             print('EARLY STOPPING!')
             break
         model.train()
@@ -112,7 +114,8 @@ def main(config):
                 'opt': optimizer.state_dict(),
                 'patience': patience,
                 'best_score': best_score,
-                'lr_schedule': lr_schedule.state_dict()
+                'lr_schedule': lr_schedule.state_dict(),
+                'early_patience': early_patience
             }, f'{config.name}.pt')
             with torch.no_grad():
                 with tqdm(testloader) as pbar:
@@ -121,6 +124,7 @@ def main(config):
                     writer.add_scalar('test/loss', train_loss, epoch)
         else:
             patience += 1
+            early_patience += 1
 
 
 
