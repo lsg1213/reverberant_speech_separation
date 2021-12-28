@@ -33,10 +33,10 @@ def iterstep(epoch, config, model, writer, pbar: tqdm, criterion, optimizer: tor
         if mode == 'train':
             optimizer.zero_grad()
         logits = model(mix)
-        loss = criterion(torch.cat([s1, s2], 1), logits)
+        loss = criterion(logits, torch.cat([s1, s2], 1))
         
         sisdri = - loss.detach().cpu()
-        loss = loss.mean()
+        # loss = loss.mean()
         # sisdri = get_sisdri(mix, torch.cat([s1, s2], 1), logits)
         # sisdri = torch.stack(list(map(cal_SDRi, torch.cat([s1, s2], 1)[-1:], logits[-1:], torch.cat([mix, mix], 1)[-1:])))
         if mode == 'train':
@@ -71,7 +71,7 @@ def main(config):
     testloader = DataLoader(testset, batch_size=config.batch, num_workers=10)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
-    lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=5, verbose=True)
+    lr_schedule = lr_scheduler.ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=5, verbose=True)
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     init_epoch = 0
     patience = 0
@@ -86,6 +86,36 @@ def main(config):
         lr_schedule.load_state_dict(resume['lr_schedule'])
         patience = resume['patience']
         early_patience = resume['early_patience']
+
+    # import pytorch_lightning as pl
+    # from asteroid.engine.system import System
+
+    # system = System(
+    #     model=model,
+    #     loss_func=criterion,
+    #     optimizer=optimizer,
+    #     train_loader=trainloader,
+    #     val_loader=valloader,
+    #     scheduler=lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=5),
+    #     config=vars(config),
+    # )
+
+    # # Define callbacks
+    # callbacks = []
+    # # Don't ask GPU if they are not available.
+    # gpus = -1 if torch.cuda.is_available() else None
+    # distributed_backend = "ddp" if torch.cuda.is_available() else None
+
+    # trainer = pl.Trainer(
+    #     max_epochs=config.epoch,
+    #     callbacks=callbacks,
+    #     default_root_dir='',
+    #     gpus=gpus,
+    #     distributed_backend=distributed_backend,
+    #     limit_train_batches=1.0,  # Useful for fast experiment
+    #     gradient_clip_val=5.0,
+    # )
+    # trainer.fit(system)
 
     for epoch in range(init_epoch, config.epoch):
         if early_patience == config.max_patience:
