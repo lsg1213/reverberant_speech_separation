@@ -79,14 +79,14 @@ def main(config):
         train_set,
         shuffle=True,
         batch_size=config.batch,
-        num_workers=gpu_num * cpu_count(),
+        num_workers=gpu_num * (cpu_count() // 4),
     )
 
     val_loader = DataLoader(
         val_set,
         shuffle=False,
         batch_size=config.batch * 2,
-        num_workers=gpu_num * cpu_count(),
+        num_workers=gpu_num * (cpu_count() // 4),
     )
 
     model = torchaudio.models.ConvTasNet(msk_activate='relu')
@@ -106,6 +106,7 @@ def main(config):
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
         model.load_state_dict(resume['model'])
+        model = model.to(device)
         optimizer.load_state_dict(resume['optimizer'])
         scheduler.load_state_dict(resume['scheduler'])
         init_epoch = resume['epoch']
