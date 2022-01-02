@@ -2,3 +2,6 @@
 /**/__*
 /**/tensorboard_log
 /**/*.event
+/save/
+/mir_eval/
+/.ipynb_checkpoints/
