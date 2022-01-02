@@ -120,12 +120,12 @@ def main(config):
         print(f'--------------- epoch: {epoch} ---------------')
         model.train()
         train_loss = iterloop(config, epoch, model, criterion, train_loader, optimizer, mode='train')
-        writer.add_scalar('train/loss', train_loss)
+        writer.add_scalar('train/loss', train_loss, epoch)
 
         model.eval()
         with torch.no_grad():
             val_loss = iterloop(config, epoch, model, criterion, val_loader, mode='val')
-        writer.add_scalar('val/loss', val_loss)
+        writer.add_scalar('val/loss', val_loss, epoch)
         scheduler.step(val_loss)
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
