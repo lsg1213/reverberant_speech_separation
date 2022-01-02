@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
+from evals import evaluate
 
 
 def iterloop(config, epoch, model, criterion, dataloader, optimizer=None, mode='train'):
@@ -57,6 +58,7 @@ def main(config):
     makedir(savepath)
 
     init_epoch = 0
+    final_epoch = 0
     
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
@@ -73,6 +75,15 @@ def main(config):
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
+    )
+    
+    test_set = LibriMix(
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
+        task='sep_clean',
+        sample_rate=config.sr,
+        n_src=config.speechnum,
+        segment=None,
+        return_id=True,
     )
 
     train_loader = DataLoader(
@@ -102,7 +113,7 @@ def main(config):
     callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=30, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_loss', mode='min', verbose=True))
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-
+    
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
         model.load_state_dict(resume['model'])
@@ -127,6 +138,7 @@ def main(config):
             val_loss = iterloop(config, epoch, model, criterion, val_loader, mode='val')
         writer.add_scalar('val/loss', val_loss, epoch)
         scheduler.step(val_loss)
+        final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
                 callback.elements.update({
@@ -139,9 +151,23 @@ def main(config):
                     if type(cb).__name__ != 'Checkpoint':
                         state = cb.state_dict()
                         callback.elements.update(state)
-            callback(val_loss)
+            if type(callback).__name__ == 'EarlyStopping':
+                tag = callback(val_loss)
+                if tag == False:
+                    # model.load_state_dict(torch.load(os.path.join(savepath, 'checkpoint.pt'))['model'])
+                    # model = model.to(device)
+                    # score = evaluate(config, model, test_set, savepath, epoch)
+                    # writer.add_scalar('test/SI-SNRI', score, final_epoch)
+                    return
+            else:
+                callback(val_loss)
         print('---------------------------------------------')
-
+    resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
+    model.load_state_dict(resume['model'])
+    model = model.to(device)
+    score = evaluate(config, model, test_set, savepath, '')
+    writer.add_scalar('test/SI-SNRI', score, resume['epoch'])
+    
 
 if __name__ == '__main__':
     main(get_args())

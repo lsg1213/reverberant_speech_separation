@@ -83,7 +83,8 @@ class EarlyStopping:
 
         if self.patience == self.max_patience:
             print('EARLY STOPPING!')
-            exit()
+            return False
+        return True
 
     def state_dict(self):
         return {'monitor': self.monitor, 'max_patience': self.max_patience, 'mode': self.mode, 'score': self.score, 'patience': self.patience}
