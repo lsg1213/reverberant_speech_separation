@@ -80,8 +80,10 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        rir_csv_path = os.path.join(csvpath, f'rir_{mode}_mix_clean.csv')
+        rir_csv_path = os.path.join(csvpath, f'rir_mixture_{mode}_mix_clean.csv')
+        rir_metric_csv_path = os.path.join(csvpath, f'rir_metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
+        rir_metric_csv = metric_csv.copy()
         rir_configs = []
         distances = []
 
@@ -95,8 +97,6 @@ def main(config):
             mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', 'rir_mix_clean')
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
             rir_csv.at[idx, 'mixture_path'] = mixture_save_path
-            if os.path.exists(mixture_save_path):
-                return
 
             # rir cross correlation operation
             sources = sources.cpu()
@@ -115,9 +115,13 @@ def main(config):
 
         with ThreadPoolExecutor(cpu_count() // 2) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
-            
+
+        rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)
+        rir_metric_csv['distance'] = distances
+
         # csv save
         rir_csv.to_csv(rir_csv_path, sep=',', na_rep='NaN')
+        rir_metric_csv.to_csv(rir_metric_csv_path, sep=',', na_rep='NaN')
 
 
 if __name__ == '__main__':

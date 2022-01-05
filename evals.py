@@ -26,7 +26,11 @@ def evaluate(config, model, dataset, savepath, epoch):
     model.eval()
     with torch.no_grad():
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
-            for mix, sources, idx in pbar:
+            for inputs in pbar:
+                if 'rir' in dataset.task:
+                    mix, sources, idx, cleanmix, clean = inputs
+                else:
+                    mix, sources, idx = inputs
                 mix = mix.to(device)
                 sources = sources.to(device)
 
