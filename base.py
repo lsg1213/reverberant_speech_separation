@@ -20,7 +20,7 @@ from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 
 
-def iterloop(config, epoch, model, criterion, dataloader, optimizer=None, mode='train'):
+def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
     scores = []
@@ -29,7 +29,16 @@ def iterloop(config, epoch, model, criterion, dataloader, optimizer=None, mode='
             mix = mix.to(device)
             clean = clean.to(device)
 
+            if config.norm:
+                mix_std = mix.std(-1, keepdim=True)
+                mix_mean = mix.mean(-1, keepdim=True)
+                mix = (mix - mix_mean) / mix_std
+                mix_std = mix_std.unsqueeze(1)
+                mix_mean = mix_mean.unsqueeze(1)
+
             logits = model(mix)
+            if config.norm:
+                logits = logits * mix_std + mix_mean
 
             loss = criterion(logits, clean)
 
@@ -40,8 +49,13 @@ def iterloop(config, epoch, model, criterion, dataloader, optimizer=None, mode='
                 optimizer.step()
             loss_val = loss.item()
             losses.append(loss_val)
-            pbar.set_postfix({'mode': mode, 'loss': np.mean(losses)})
-    if mode != 'test':
+            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
+            if mode == 'val':
+                score = metric(torch.stack([mix, mix], 1), clean) - metric(logits, clean)
+                scores.append(score.tolist())
+                progress_bar_dict['score'] = np.mean(scores)
+            pbar.set_postfix(progress_bar_dict)
+    if mode == 'train':
         return np.mean(losses)
     else:
         return np.mean(losses), np.mean(scores)
@@ -50,6 +64,8 @@ def iterloop(config, epoch, model, criterion, dataloader, optimizer=None, mode='
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     config.name += f'_{config.batch}'
+    if config.norm:
+        config.name += '_norm'
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(os.path.join(config.tensorboard_path, config.name))
     savepath = os.path.join('save', config.name)
@@ -110,8 +126,9 @@ def main(config):
         json.dump(vars(config), f)
 
     callbacks = []
-    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=30, verbose=True))
-    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_loss', mode='min', verbose=True))
+    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=30, verbose=True))
+    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
+    metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     
     if config.resume:
@@ -130,13 +147,15 @@ def main(config):
     for epoch in range(init_epoch, config.epoch):
         print(f'--------------- epoch: {epoch} ---------------')
         model.train()
-        train_loss = iterloop(config, epoch, model, criterion, train_loader, optimizer, mode='train')
+        train_loss = iterloop(config, epoch, model, criterion, train_loader, metric, optimizer=optimizer, mode='train')
         writer.add_scalar('train/loss', train_loss, epoch)
 
         model.eval()
         with torch.no_grad():
-            val_loss = iterloop(config, epoch, model, criterion, val_loader, mode='val')
+            val_loss, val_score = iterloop(config, epoch, model, criterion, val_loader, metric, mode='val')
+        results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
         writer.add_scalar('val/loss', val_loss, epoch)
+        writer.add_scalar('val/SI-SNRI', val_score, epoch)
         scheduler.step(val_loss)
         final_epoch += 1
         for callback in callbacks:
@@ -150,9 +169,9 @@ def main(config):
                 for cb in callbacks:
                     if type(cb).__name__ != 'Checkpoint':
                         state = cb.state_dict()
-                        callback.elements.update(state)
+                        callback.elements[type(cb).__name__] = state
             if type(callback).__name__ == 'EarlyStopping':
-                tag = callback(val_loss)
+                tag = callback(results)
                 if tag == False:
                     # model.load_state_dict(torch.load(os.path.join(savepath, 'checkpoint.pt'))['model'])
                     # model = model.to(device)
@@ -160,9 +179,10 @@ def main(config):
                     # writer.add_scalar('test/SI-SNRI', score, final_epoch)
                     return
             else:
-                callback(val_loss)
+                callback(results)
         print('---------------------------------------------')
     resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
+    import pdb; pdb.set_trace()
     model.load_state_dict(resume['model'])
     model = model.to(device)
     score = evaluate(config, model, test_set, savepath, '')

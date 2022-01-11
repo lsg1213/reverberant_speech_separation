@@ -22,6 +22,19 @@ from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 
 
+def minmaxnorm(data):
+    ndim = data.ndim
+    mindata = data.view(data.shape[0],-1).min(-1, keepdim=True)[0]
+    maxdata = data.view(data.shape[0],-1).max(-1, keepdim=True)[0]
+    
+    while not (mindata.ndim == maxdata.ndim == ndim):
+        mindata = mindata.unsqueeze(1)
+        maxdata = maxdata.unsqueeze(1)
+    data = (2 * (data - mindata) / (maxdata - mindata)) - 1.
+    return data
+
+
+
 def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
@@ -33,9 +46,28 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
             cleanmix = cleanmix.to(device)
             clean = clean.to(device)
 
+            # min-max norm (-1~1)
+            if config.norm:
+                mix_std = mix.std(-1, keepdim=True)
+                mix_mean = mix.mean(-1, keepdim=True)
+                clean_std = cleanmix.std(-1, keepdim=True)
+                clean_mean = cleanmix.mean(-1, keepdim=True)
+                mix = (mix - mix_mean) / mix_std
+                cleanmix = (cleanmix - clean_mean) / clean_std
+                mix_std = mix_std.unsqueeze(1)
+                mix_mean = mix_mean.unsqueeze(1)
+                clean_std = clean_std.unsqueeze(1)
+                clean_mean = clean_mean.unsqueeze(1)
+            # mix = minmaxnorm(mix)
+            # rev_clean = minmaxnorm(rev_clean)
+            # cleanmix = minmaxnorm(cleanmix)
+            # clean = minmaxnorm(clean)
+
             logits = model(mix)
             clean_logits = model(cleanmix)
-
+            if config.norm:
+                logits = logits * mix_std + mix_mean
+                clean_logits = clean_logits * clean_std + clean_mean
             loss = criterion(logits, rev_clean) + criterion(clean_logits, clean)
 
             if mode == 'train':
@@ -47,7 +79,7 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
             losses.append(loss_val)
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
             if mode == 'val':
-                score = metric(mix, clean) - metric(logits, clean)
+                score = metric(torch.stack([mix, mix], 1), clean) - metric(logits, clean)
                 scores.append(score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
@@ -60,6 +92,14 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     config.name += f'_{config.batch}'
+    if 'rir' not in config.task:
+        config.task = ''
+        config.name += '_clean'
+    else:
+        config.name += '_' + config.task
+        config.task += '_'
+    if config.norm:
+        config.name += '_norm'
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(os.path.join(config.tensorboard_path, config.name))
     savepath = os.path.join('save', config.name)
@@ -73,7 +113,7 @@ def main(config):
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
-        task='rir_sep_clean',
+        task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -81,7 +121,7 @@ def main(config):
 
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
-        task='rir_sep_clean',
+        task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -89,7 +129,7 @@ def main(config):
     
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
-        task='rir_sep_clean',
+        task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=None,
@@ -120,10 +160,15 @@ def main(config):
         json.dump(vars(config), f)
 
     callbacks = []
-    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=30, verbose=True))
-    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_loss', mode='min', verbose=True))
+    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=30, verbose=True))
+    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    criterion = torch.nn.MSELoss()
+    def mseloss():
+        def _mseloss(logit, answer):
+            return MSELoss(reduction='none')(logit, answer).mean(-1, keepdim=True)
+        return _mseloss
+    criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
+    # criterion = PITLossWrapper(mseloss(), pit_from="pw_mtx")
     
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
@@ -147,6 +192,7 @@ def main(config):
         model.eval()
         with torch.no_grad():
             val_loss, val_score = iterloop(config, epoch, model, criterion, val_loader, metric, mode='val')
+        results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
         writer.add_scalar('val/loss', val_loss, epoch)
         writer.add_scalar('val/SI-SNRI', val_score, epoch)
         scheduler.step(val_loss)
@@ -162,9 +208,9 @@ def main(config):
                 for cb in callbacks:
                     if type(cb).__name__ != 'Checkpoint':
                         state = cb.state_dict()
-                        callback.elements.update(state)
+                        callback.elements[type(cb).__name__] = state
             if type(callback).__name__ == 'EarlyStopping':
-                tag = callback(val_loss)
+                tag = callback(results)
                 if tag == False:
                     # model.load_state_dict(torch.load(os.path.join(savepath, 'checkpoint.pt'))['model'])
                     # model = model.to(device)
@@ -172,7 +218,7 @@ def main(config):
                     # writer.add_scalar('test/SI-SNRI', score, final_epoch)
                     return
             else:
-                callback(val_loss)
+                callback(results)
         print('---------------------------------------------')
     resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
     model.load_state_dict(resume['model'])

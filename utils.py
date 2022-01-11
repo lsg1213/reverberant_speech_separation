@@ -1,10 +1,11 @@
+from genericpath import exists
 import os
 import torch
 
 
 def makedir(dirs):
     if not os.path.exists(dirs):
-        os.makedirs(dirs)
+        os.makedirs(dirs, exist_ok=True)
         print(dirs)
 
 

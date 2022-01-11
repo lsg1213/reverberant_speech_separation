@@ -7,7 +7,7 @@ class Checkpoint:
     def __init__(self, elements: dict = {}, checkpoint_dir='save', monitor='val_loss', mode='min', verbose=True) -> None:
         self.elements = elements
         self.dir = checkpoint_dir
-        self.monitor = 'val_loss'
+        self.monitor = monitor
         self.mode = mode
         self.verbose = verbose
         if mode == 'min':
@@ -28,7 +28,9 @@ class Checkpoint:
             else:
                 return False
 
-    def __call__(self, score):
+    def __call__(self, score: dict):
+        score = score.get(self.monitor)
+        
         cmp = self.cmp(score)
         if cmp:
             self.score = score
@@ -48,7 +50,7 @@ class Checkpoint:
 
 class EarlyStopping:
     def __init__(self, monitor='val_loss', mode='min', patience=30, verbose=True) -> None:
-        self.monitor = 'val_loss'
+        self.monitor = monitor
         self.max_patience = patience
         self.mode = mode
         self.verbose = verbose
@@ -71,6 +73,8 @@ class EarlyStopping:
                 return False
 
     def __call__(self, score):
+        score = score.get(self.monitor)
+        
         cmp = self.cmp(score)
         if cmp:
             self.patience = 0

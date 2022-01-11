@@ -33,8 +33,16 @@ def evaluate(config, model, dataset, savepath, epoch):
                     mix, sources, idx = inputs
                 mix = mix.to(device)
                 sources = sources.to(device)
+                if config.norm:
+                    mix_std = mix.std(-1, keepdim=True)
+                    mix_mean = mix.mean(-1, keepdim=True)
+                    mix = (mix - mix_mean) / mix_std
+                    mix_std = mix_std.unsqueeze(1)
+                    mix_mean = mix_mean.unsqueeze(1)
 
                 logits = model(mix.unsqueeze(0))
+                if config.norm:
+                    logits = logits * mix_std + mix_mean
                 si_sdr, reordered_sources = criterion(logits, sources[None], return_est=True)
                 input_si_sdr = criterion(torch.stack([mix, mix], 0).unsqueeze(0), sources[None])
                 si_sdri = - (si_sdr - input_si_sdr).tolist() # loss is - si-sdr

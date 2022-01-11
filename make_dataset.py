@@ -80,8 +80,9 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        rir_csv_path = os.path.join(csvpath, f'rir_mixture_{mode}_mix_clean.csv')
-        rir_metric_csv_path = os.path.join(csvpath, f'rir_metrics_{mode}_mix_clean.csv')
+        prefix = 'rirnorm_'
+        rir_csv_path = os.path.join(csvpath, f'{prefix}mixture_{mode}_mix_clean.csv')
+        rir_metric_csv_path = os.path.join(csvpath, f'{prefix}metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
         rir_metric_csv = metric_csv.copy()
         rir_configs = []
@@ -94,17 +95,21 @@ def main(config):
             rir_configs.append(rir_config)
             distances.append(distance)
             
-            mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', 'rir_mix_clean')
+            mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
             rir_csv.at[idx, 'mixture_path'] = mixture_save_path
 
+            dis = torch.from_numpy(((rir_config['pos_src'] - rir_config['pos_rcv']) ** 2).sum(-1, keepdims=True) ** 0.5).type(sources.dtype) # distance between source and mic
             # rir cross correlation operation
             sources = sources.cpu()
             rir_function = torch.from_numpy(rir_function.squeeze()[...,::-1].copy()).cpu()
             a_coefficient = torch.nn.functional.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-
             sources = F.pad(sources, (rir_function.shape[-1] - 1, rir_function.shape[-1]))
             rir_sources = torchaudio.functional.filtfilt(sources, a_coefficient, rir_function)
+
+            # rir normalization
+            rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0] / dis
+            import pdb; pdb.set_trace()
 
             snr2 = 10 ** (metric['source_2_SNR'] / 20.)
             mixture_wave = rir_sources[:1] + rir_sources[1:] * snr2
@@ -113,7 +118,7 @@ def main(config):
             torchaudio.save(mixture_save_path, mixture_wave.cpu(), config.sr)
             print(mixture_save_path)
 
-        with ThreadPoolExecutor(cpu_count() // 2) as pool:
+        with ThreadPoolExecutor(1) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
         rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)
