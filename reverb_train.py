@@ -67,9 +67,10 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
 
             if config.model == '':
                 logits = model(mix)
+                clean_logits = model(cleanmix)
             else:
                 logits = model(mix, distance)
-            clean_logits = model(cleanmix)
+                clean_logits = model(cleanmix, torch.zeros_like(distance))
             if config.norm:
                 logits = logits * mix_std + mix_mean
                 clean_logits = clean_logits * clean_std + clean_mean
@@ -96,17 +97,19 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
 
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
-    config.name += f'_{config.batch}'
+    name = 'reverb_' + config.model if config.model is not '' else 'baseline'
+    name += f'_{config.batch}'
     if config.model != '' and config.task == '':
         raise ArgumentError('clean separation model should be baseline model')
     if 'rir' not in config.task:
         config.task = ''
-        config.name += '_clean'
+        name += '_clean'
     else:
-        config.name += '_' + config.task
+        name += '_' + config.task
         config.task += '_'
     if config.norm:
-        config.name += '_norm'
+        name += '_norm'
+    config.name = name + config.name if config.name is not '' else ''
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(os.path.join(config.tensorboard_path, config.name))
     savepath = os.path.join('save', config.name)
@@ -163,7 +166,7 @@ def main(config):
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif config.model == 'v1':
-        model = ConvTasNet_v1()
+        model = ConvTasNet_v1(distance=True)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)

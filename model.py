@@ -203,7 +203,7 @@ class ConvTasNet_v1(torch.nn.Module):
         msk_num_layers: int = 8,
         msk_num_stacks: int = 3,
         msk_activate: str = "sigmoid",
-        distance: bool = False,
+        distance: bool = True,
     ):
         super().__init__()
 
@@ -311,7 +311,7 @@ class ConvTasNet_v1(torch.nn.Module):
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
         feats = self.encoder(padded)  # B, F, M
         if distance is not None:
-            mask_in_feats = torch.cat([feats, distance.unsqueeze(1).expand(batch_size,1,feats.shape[-1])], 1)
+            mask_in_feats = torch.cat([feats, distance.unsqueeze(1).unsqueeze(1).expand(batch_size,1,feats.shape[-1]).type(feats.dtype)], 1)
         else:
             mask_in_feats = feats
             
