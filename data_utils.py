@@ -5,6 +5,7 @@ import soundfile as sf
 import numpy as np
 import pandas as pd
 import torch
+from glob import glob
 from torch.utils.data import Dataset
 
 
@@ -33,11 +34,18 @@ class LibriMix(Dataset):
     dataset_name = "LibriMix"
 
     def __init__(
-        self, csv_dir, task="sep_clean", sample_rate=16000, n_src=2, segment=3, return_id=False
+        self, csv_dir, config, task="sep_clean", sample_rate=16000, n_src=2, segment=3, return_id=False
     ):
+        self.config = config
         self.mode = csv_dir.split('/')[-1]
         csv_dir = os.path.join('/'.join(csv_dir.split('/')[:-1]), 'metadata/')
         self.csv_dir = csv_dir
+        if self.config.model != '':
+            prefix = task.split('_')[0]
+            dis_csv = glob(os.path.join(self.csv_dir, f'*{prefix}_metrics_{self.mode}*'))
+            if len(dis_csv) != 1:
+                raise ValueError('distance csv parsing was wrong')
+            self.dis_csv = pd.read_csv(dis_csv[0])
         self.task = task
         self.return_id = return_id
         # Get the csv corresponding to the task
@@ -133,14 +141,28 @@ class LibriMix(Dataset):
             cs_source_list = torch.from_numpy(np.vstack(cs_source_list))
         # Convert sources to tensor
         sources = torch.from_numpy(sources)
-        if 'rir' in self.task:
+
+        if self.config.model == '':
+            if 'rir' in self.task:
+                if not self.return_id:
+                    return mixture, sources, clean_mixture, cs_source_list
+                # 5400-34479-0005_4973-24515-0007.wav
+                id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
+                return mixture, sources, [id1, id2], clean_mixture, cs_source_list
             if not self.return_id:
-                return mixture, sources, clean_mixture, cs_source_list
+                return mixture, sources
             # 5400-34479-0005_4973-24515-0007.wav
             id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-            return mixture, sources, [id1, id2], clean_mixture, cs_source_list
-        if not self.return_id:
-            return mixture, sources
-        # 5400-34479-0005_4973-24515-0007.wav
-        id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-        return mixture, sources, [id1, id2]
+            return mixture, sources, [id1, id2]
+        else:
+            if 'rir' in self.task:
+                if not self.return_id:
+                    return mixture, sources, clean_mixture, cs_source_list, self.dis_csv.iloc[idx]['distance']
+                # 5400-34479-0005_4973-24515-0007.wav
+                id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
+                return mixture, sources, [id1, id2], clean_mixture, cs_source_list, self.dis_csv.iloc[idx]['distance']
+            if not self.return_id:
+                return mixture, sources, self.dis_csv.iloc[idx]['distance']
+            # 5400-34479-0005_4973-24515-0007.wav
+            id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
+            return mixture, sources, [id1, id2], self.dis_csv.iloc[idx]['distance']

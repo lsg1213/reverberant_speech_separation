@@ -331,7 +331,7 @@ class ConvTasNet_v1(torch.nn.Module):
 if __name__ == '__main__':
     from torchsummary import summary
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ConvTasNet_v1(distance=True).to(device)
+    model = ConvTasNet_v1().to(device)
     mix = torch.rand((2,24000), dtype=torch.float32, device=device)
     distance = torch.rand((2,1), dtype=torch.float32, device=device)
     aa = model(mix, distance)

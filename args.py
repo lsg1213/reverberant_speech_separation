@@ -8,6 +8,7 @@ def get_args():
     args.add_argument('--name', type=str, default='test')
     args.add_argument('--datapath', type=str, default='/root/bigdatasets/librimix')
     args.add_argument('--speechnum', type=int, default=2, choices=[2, 3])
+    args.add_argument('--model', type=str, default='', choices=['', 'v1'])
     args.add_argument('--batch', type=int, default=18)
     args.add_argument('--task', type=str, default='')
     args.add_argument('--epoch', type=int, default=200)

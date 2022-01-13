@@ -109,7 +109,6 @@ def main(config):
 
             # rir normalization
             rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0] / dis
-            import pdb; pdb.set_trace()
 
             snr2 = 10 ** (metric['source_2_SNR'] / 20.)
             mixture_wave = rir_sources[:1] + rir_sources[1:] * snr2

@@ -79,6 +79,7 @@ def main(config):
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
+        config=config,
         task='sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -87,6 +88,7 @@ def main(config):
 
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
+        config=config,
         task='sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -95,6 +97,7 @@ def main(config):
     
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
+        config=config,
         task='sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -182,11 +185,11 @@ def main(config):
                 callback(results)
         print('---------------------------------------------')
     resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
-    import pdb; pdb.set_trace()
     model.load_state_dict(resume['model'])
     model = model.to(device)
-    score = evaluate(config, model, test_set, savepath, '')
-    writer.add_scalar('test/SI-SNRI', score, resume['epoch'])
+    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
     
 
 if __name__ == '__main__':

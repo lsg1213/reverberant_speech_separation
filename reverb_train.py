@@ -1,3 +1,4 @@
+from argparse import ArgumentError
 import os
 
 from torch.nn.modules.loss import MSELoss
@@ -20,6 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
+from model import ConvTasNet_v1
 
 
 def minmaxnorm(data):
@@ -40,13 +42,17 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
     losses = []
     scores = []
     with tqdm(dataloader) as pbar:
-        for mix, rev_clean, cleanmix, clean in pbar:
+        for inputs in pbar:
+            if config.model == '':
+                mix, rev_clean, cleanmix, clean = inputs
+            else:
+                mix, rev_clean, cleanmix, clean, distance = inputs
+                distance = distance.to(device)
             mix = mix.to(device)
             rev_clean = rev_clean.to(device)
             cleanmix = cleanmix.to(device)
             clean = clean.to(device)
 
-            # min-max norm (-1~1)
             if config.norm:
                 mix_std = mix.std(-1, keepdim=True)
                 mix_mean = mix.mean(-1, keepdim=True)
@@ -58,12 +64,11 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
                 mix_mean = mix_mean.unsqueeze(1)
                 clean_std = clean_std.unsqueeze(1)
                 clean_mean = clean_mean.unsqueeze(1)
-            # mix = minmaxnorm(mix)
-            # rev_clean = minmaxnorm(rev_clean)
-            # cleanmix = minmaxnorm(cleanmix)
-            # clean = minmaxnorm(clean)
 
-            logits = model(mix)
+            if config.model == '':
+                logits = model(mix)
+            else:
+                logits = model(mix, distance)
             clean_logits = model(cleanmix)
             if config.norm:
                 logits = logits * mix_std + mix_mean
@@ -92,6 +97,8 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     config.name += f'_{config.batch}'
+    if config.model != '' and config.task == '':
+        raise ArgumentError('clean separation model should be baseline model')
     if 'rir' not in config.task:
         config.task = ''
         config.name += '_clean'
@@ -113,6 +120,7 @@ def main(config):
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
+        config=config,
         task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -121,6 +129,7 @@ def main(config):
 
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
+        config=config,
         task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -129,6 +138,7 @@ def main(config):
     
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
+        config=config,
         task=config.task + 'sep_clean',
         sample_rate=config.sr,
         n_src=config.speechnum,
@@ -150,7 +160,10 @@ def main(config):
         num_workers=gpu_num * (cpu_count() // 4),
     )
 
-    model = torchaudio.models.ConvTasNet(msk_activate='relu')
+    if config.model == '':
+        model = torchaudio.models.ConvTasNet(msk_activate='relu')
+    elif config.model == 'v1':
+        model = ConvTasNet_v1()
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)
@@ -223,8 +236,9 @@ def main(config):
     resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
     model.load_state_dict(resume['model'])
     model = model.to(device)
-    score = evaluate(config, model, test_set, savepath, '')
-    writer.add_scalar('test/SI-SDRI', score, resume['epoch'])
+    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
     
 
 if __name__ == '__main__':
