@@ -67,7 +67,7 @@ def main(config):
     if config.norm:
         config.name += '_norm'
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
-    writer = SummaryWriter(os.path.join(config.tensorboard_path, config.name))
+    writer = SummaryWriter(config.tensorboard_path)
     savepath = os.path.join('save', config.name)
     device = get_device()
     makedir(config.tensorboard_path)

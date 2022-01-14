@@ -7,6 +7,7 @@ class Checkpoint:
     def __init__(self, elements: dict = {}, checkpoint_dir='save', monitor='val_loss', mode='min', verbose=True) -> None:
         self.elements = elements
         self.dir = checkpoint_dir
+        self.bestdir = os.path.join('/'.join(checkpoint_dir.split('/')[:-1]), 'best.pt')
         self.monitor = monitor
         self.mode = mode
         self.verbose = verbose
@@ -32,12 +33,16 @@ class Checkpoint:
         score = score.get(self.monitor)
         
         cmp = self.cmp(score)
+        self.elements['Checkpoint'] = self.state_dict()
+        save(self.elements, self.dir)
+        if self.verbose:
+            print(f'Make checkpoint to {self.dir}')
+
         if cmp:
             self.score = score
-            self.elements['Checkpoint'] = self.state_dict()
-            save(self.elements, self.dir)
+            save(self.elements, self.bestdir)
             if self.verbose:
-                print(f'Make checkpoint to {self.dir}')
+                print(f'Make best model to {self.bestdir}')
 
     def state_dict(self):
         return {'monitor': self.monitor, 'mode': self.mode, 'score': self.score}

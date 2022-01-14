@@ -221,7 +221,7 @@ class ConvTasNet_v1(torch.nn.Module):
             bias=False,
         )
         self.mask_generator = MaskGenerator(
-            input_dim=enc_num_feats + int(distance),
+            input_dim=enc_num_feats,
             output_dim = enc_num_feats,
             num_sources=num_sources,
             kernel_size=msk_kernel_size,
@@ -239,6 +239,11 @@ class ConvTasNet_v1(torch.nn.Module):
             padding=self.enc_stride,
             bias=False,
         )
+        self.dis = torch.nn.ModuleList([
+            torch.nn.Linear(1, 512, bias=False),
+            torch.nn.Linear(512, 1536, bias=False),
+            torch.nn.Linear(1536, 3001, bias=False),
+        ])
 
     def _align_num_frames_with_strides(
         self, input: torch.Tensor
@@ -311,14 +316,18 @@ class ConvTasNet_v1(torch.nn.Module):
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
         feats = self.encoder(padded)  # B, F, M
         if distance is not None:
-            mask_in_feats = torch.cat([feats, distance.unsqueeze(1).unsqueeze(1).expand(batch_size,1,feats.shape[-1]).type(feats.dtype)], 1)
+            # dis = distance.unsqueeze(1).unsqueeze(1).expand(batch_size,1,feats.shape[-1]).type(feats.dtype)
+            dis = distance.unsqueeze(-1).expand(batch_size,feats.shape[-2]).unsqueeze(-1).type(feats.dtype)
+            for layer in self.dis:
+                dis = layer(dis)
+            mask_in_feats = feats + dis
         else:
             mask_in_feats = feats
             
         masked = self.mask_generator(mask_in_feats) * feats.unsqueeze(1)  # B, S, F, M
         masked = masked.view(
             batch_size * self.num_sources, self.enc_num_feats, -1
-        )  # B*S, F, M
+        )  # B*S, F, M  
         decoded = self.decoder(masked)  # B*S, 1, L'
         output = decoded.view(
             batch_size, self.num_sources, num_padded_frames

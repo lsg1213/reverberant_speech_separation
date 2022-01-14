@@ -41,6 +41,8 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
     device = get_device()
     losses = []
     scores = []
+    rev_losses = []
+    clean_losses = []
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             if config.model == '':
@@ -74,19 +76,26 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
             if config.norm:
                 logits = logits * mix_std + mix_mean
                 clean_logits = clean_logits * clean_std + clean_mean
-            loss = criterion(logits, rev_clean) + criterion(clean_logits, clean)
+            rev_loss = criterion(logits, rev_clean)
+            clean_loss = criterion(clean_logits, clean)
+            loss = rev_loss + clean_loss
 
             if mode == 'train':
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                 optimizer.step()
-            loss_val = loss.item()
-            losses.append(loss_val)
-            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
+            losses.append(loss.item())
+            rev_losses.append(rev_loss.item())
+            clean_losses.append(clean_loss.item())
+            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses), 'clean_loss': np.mean(clean_losses)}
             if mode == 'val':
-                score = metric(torch.stack([mix, mix], 1), clean) - metric(logits, clean)
+                input_score = - metric(torch.stack([mix, mix], 1), clean)
+                output_score = - metric(logits, clean)
+                score = output_score - input_score
                 scores.append(score.tolist())
+                progress_bar_dict['input_score'] = np.mean(input_score.tolist())
+                progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
     if mode == 'train':
@@ -109,9 +118,9 @@ def main(config):
         config.task += '_'
     if config.norm:
         name += '_norm'
-    config.name = name + config.name if config.name is not '' else ''
+    config.name = name + '_' + config.name if config.name is not '' else ''
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
-    writer = SummaryWriter(os.path.join(config.tensorboard_path, config.name))
+    writer = SummaryWriter(config.tensorboard_path)
     savepath = os.path.join('save', config.name)
     device = get_device()
     makedir(config.tensorboard_path)
@@ -236,7 +245,7 @@ def main(config):
             else:
                 callback(results)
         print('---------------------------------------------')
-    resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
+    resume = torch.load(os.path.join(savepath, 'best.pt'))
     model.load_state_dict(resume['model'])
     model = model.to(device)
     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
