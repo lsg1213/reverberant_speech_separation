@@ -102,9 +102,8 @@ def main(config):
             dis = torch.from_numpy(((rir_config['pos_src'] - rir_config['pos_rcv']) ** 2).sum(-1, keepdims=True) ** 0.5).type(sources.dtype) # distance between source and mic
             # rir cross correlation operation
             sources = sources.cpu()
-            rir_function = torch.from_numpy(rir_function.squeeze()[...,::-1].copy()).cpu()
-            a_coefficient = torch.nn.functional.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-            sources = F.pad(sources, (rir_function.shape[-1] - 1, rir_function.shape[-1]))
+            rir_function = torch.from_numpy(rir_function.squeeze()).cpu()
+            a_coefficient = F.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
             rir_sources = torchaudio.functional.filtfilt(sources, a_coefficient, rir_function)
 
             # rir normalization
@@ -117,7 +116,7 @@ def main(config):
             torchaudio.save(mixture_save_path, mixture_wave.cpu(), config.sr)
             print(mixture_save_path)
 
-        with ThreadPoolExecutor(1) as pool:
+        with ThreadPoolExecutor(cpu_count() // 2) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
         rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)
