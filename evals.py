@@ -11,8 +11,6 @@ import soundfile as sf
 from utils import get_device, makedir
 
 
-COMPUTE_METRICS = ["si_sdr", "sdr"]
-
 def evaluate(config, model, dataset, savepath, epoch):
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     device = get_device()

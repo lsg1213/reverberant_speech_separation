@@ -5,7 +5,7 @@ from torch.cuda import device_count
 
 def get_args():
     args = argparse.ArgumentParser()
-    args.add_argument('--name', type=str, default='test')
+    args.add_argument('--name', type=str, default='')
     args.add_argument('--datapath', type=str, default='/root/bigdatasets/librimix')
     args.add_argument('--speechnum', type=int, default=2, choices=[2, 3])
     args.add_argument('--model', type=str, default='', choices=['', 'v1'])

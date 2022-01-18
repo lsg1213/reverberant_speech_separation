@@ -54,7 +54,7 @@ def get_RIR(config):
     fs = config.sr
     att_diff = 15.0
     att_max = 60.0
-    limit = 0.5
+    limit = 0.5 # 벽면에서부터 거리
 
     room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
     pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])

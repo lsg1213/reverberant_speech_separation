@@ -20,7 +20,7 @@ from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 
 
-def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
+def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
     scores = []
@@ -50,10 +50,19 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
             loss_val = loss.item()
             losses.append(loss_val)
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
+            writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
+
             if mode == 'val':
-                score = metric(torch.stack([mix, mix], 1), clean) - metric(logits, clean)
+                input_score = - metric(torch.stack([mix, mix], 1), clean)
+                output_score = - metric(logits, clean)
+                score = output_score - input_score
                 scores.append(score.tolist())
+                progress_bar_dict['input_score'] = np.mean(input_score.tolist())
+                progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
+                writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
+                writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_score.tolist()), epoch)
+                writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_score.tolist()), epoch)
             pbar.set_postfix(progress_bar_dict)
     if mode == 'train':
         return np.mean(losses)
@@ -63,9 +72,11 @@ def iterloop(config, epoch, model, criterion, dataloader, metric, optimizer=None
 
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
-    config.name += f'_{config.batch}'
+    name = 'baseline'
+    name += f'_{config.batch}'
     if config.norm:
-        config.name += '_norm'
+        name += '_norm'
+    config.name = name + ('_' + config.name if config.name != '' else '') 
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
     savepath = os.path.join('save', config.name)
@@ -123,7 +134,7 @@ def main(config):
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=5)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=5, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
@@ -150,15 +161,12 @@ def main(config):
     for epoch in range(init_epoch, config.epoch):
         print(f'--------------- epoch: {epoch} ---------------')
         model.train()
-        train_loss = iterloop(config, epoch, model, criterion, train_loader, metric, optimizer=optimizer, mode='train')
-        writer.add_scalar('train/loss', train_loss, epoch)
+        train_loss = iterloop(config, writer, epoch, model, criterion, train_loader, metric, optimizer=optimizer, mode='train')
 
         model.eval()
         with torch.no_grad():
-            val_loss, val_score = iterloop(config, epoch, model, criterion, val_loader, metric, mode='val')
+            val_loss, val_score = iterloop(config, writer, epoch, model, criterion, val_loader, metric, mode='val')
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
-        writer.add_scalar('val/loss', val_loss, epoch)
-        writer.add_scalar('val/SI-SNRI', val_score, epoch)
         scheduler.step(val_loss)
         final_epoch += 1
         for callback in callbacks:
@@ -176,15 +184,17 @@ def main(config):
             if type(callback).__name__ == 'EarlyStopping':
                 tag = callback(results)
                 if tag == False:
-                    # model.load_state_dict(torch.load(os.path.join(savepath, 'checkpoint.pt'))['model'])
-                    # model = model.to(device)
-                    # score = evaluate(config, model, test_set, savepath, epoch)
-                    # writer.add_scalar('test/SI-SNRI', score, final_epoch)
+                    resume = torch.load(os.path.join(savepath, 'best.pt'))
+                    model.load_state_dict(resume['model'])
+                    model = model.to(device)
+                    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+                    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+                    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
                     return
             else:
                 callback(results)
         print('---------------------------------------------')
-    resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
+    resume = torch.load(os.path.join(savepath, 'best.pt'))
     model.load_state_dict(resume['model'])
     model = model.to(device)
     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
