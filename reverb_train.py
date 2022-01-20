@@ -21,7 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from model import ConvTasNet_v1
+from model import ConvTasNet_v1, ConvTasNet_v2
 
 
 def minmaxnorm(data):
@@ -183,6 +183,9 @@ def main(config):
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif config.model == 'v1':
         model = ConvTasNet_v1(distance=True)
+    elif config.model == 'v2':
+        model = ConvTasNet_v2(distance=True)
+
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)
