@@ -21,7 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from model import ConvTasNet_v1, ConvTasNet_v2
+from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3
 
 
 def minmaxnorm(data):
@@ -185,6 +185,8 @@ def main(config):
         model = ConvTasNet_v1(distance=True)
     elif config.model == 'v2':
         model = ConvTasNet_v2(distance=True)
+    elif config.model == 'v3':
+        model = ConvTasNet_v3(distance=True)
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)

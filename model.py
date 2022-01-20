@@ -2,6 +2,11 @@ from typing import Tuple, Optional
 
 import torch
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
+
+import functools
+from multiprocessing import Pool, cpu_count
+from concurrent.futures import ThreadPoolExecutor
 
 
 # base code: torchaudio.models.ConvTasNet
@@ -376,7 +381,9 @@ class SlimmableConv1dTranspose(torch.nn.ConvTranspose1d):
                 input[idx:idx+1, :number], weight, bias, self.stride, self.padding,
                 dilation=self.dilation, groups=self.groups)
             return y
-        y = torch.cat(list(map(conv_transpose_1d, range(input.shape[0]))), 0)
+
+        with ThreadPoolExecutor(cpu_count() // 2) as pool:
+            y = torch.cat(list(pool.map(conv_transpose_1d, range(input.shape[0]))), 0)
         return y
 
 
@@ -542,7 +549,252 @@ class ConvTasNet_v2(torch.nn.Module):
 
         # decoded = self.decoder(masked, dis / dis_max, ratio_range)  # B*S, 1, L'
         decoded = self.decoder(masked, 1. - dis / dis_max, ratio_range)  # distance가 멀수록 적게 사용, reverse
-        # decoded = self.decoder(masked, dis / dis_max, ratio_range)  # distance가 멀수록 적게 사용
+        # decoded = self.decoder(masked, dis / dis_max, ratio_range)  # distance가 멀수록 많이 사용
+
+        output = decoded.view(
+            batch_size, self.num_sources, num_padded_frames
+        )  # B, S, L'
+        if num_pads > 0:
+            output = output[..., :-num_pads]  # B, S, L
+        return output
+
+
+class SlimmableConv1d(torch.nn.Conv1d):
+    def __init__(self, in_channels_max, out_channels_max,
+                 kernel_size, stride=1, padding=0, dilation=1,
+                 groups=1, bias=True):
+        super(SlimmableConv1d, self).__init__(
+            in_channels_max, out_channels_max,
+            kernel_size, stride=stride, padding=padding, dilation=dilation,
+            groups=groups, bias=bias)
+        self.in_channels_max = in_channels_max
+        self.out_channels_max = out_channels_max
+        self.groups = groups
+
+    def forward(self, input, channel_ratio, ratio_range):
+        input_chan = input.shape[1]
+        channel_range = torch.tensor(ratio_range, dtype=self.weight.dtype, device=self.weight.device) * self.weight.shape[0]
+        min_chan = channel_range[0]
+        max_chan = channel_range[1]
+        channel_num = ((max_chan - min_chan) * channel_ratio).int() + min_chan
+
+        def conv_1d(idx): # idx: batch index
+            number = channel_num[idx].int()
+            weight = self.weight[:number, :input_chan, ...]
+            if self.bias is not None:
+                bias = self.bias[:number]
+            else:
+                bias = self.bias
+            y = F.conv1d(input[idx:idx+1, :number], weight, bias, self.stride, self.padding, dilation=self.dilation, groups=self.groups)
+
+            y = F.pad(y, (0, 0, 0, self.weight.shape[0] - number))
+            return y
+            
+        with ThreadPoolExecutor(cpu_count() // 2) as pool:
+            y = torch.cat(list(pool.map(conv_1d, range(input.shape[0]))), 0)
+        return y
+
+
+class SlimmableSeparableConv1d(torch.nn.Conv1d):
+    def __init__(self, in_channels_max, out_channels_max,
+                 kernel_size, stride=1, padding=0, dilation=1,
+                 groups=1, bias=True):
+        super(SlimmableSeparableConv1d, self).__init__(
+            in_channels_max, out_channels_max,
+            kernel_size, stride=stride, padding=padding, dilation=dilation,
+            groups=groups, bias=bias)
+        self.in_channels_max = in_channels_max
+        self.out_channels_max = out_channels_max
+        self.groups = groups # no use
+        self.pointwise_weight = Parameter(torch.empty((out_channels_max, out_channels_max, 1), device=self.weight.device, dtype=self.weight.dtype))
+        torch.nn.init.kaiming_uniform_(self.pointwise_weight, a=5 ** 0.5)
+
+    def forward(self, input, channel_ratio, ratio_range):
+        input_chan = input.shape[1]
+        channel_range = torch.tensor(ratio_range, dtype=self.weight.dtype, device=self.weight.device) * self.weight.shape[0]
+        min_chan = channel_range[0]
+        max_chan = channel_range[1]
+        channel_num = ((max_chan - min_chan) * channel_ratio).int() + min_chan
+
+        def conv_1d(idx): # idx: batch index
+            number = channel_num[idx].int()
+            weight = self.weight[:number, :input_chan, ...]
+            if self.bias is not None:
+                bias = self.bias[:number]
+            else:
+                bias = self.bias
+            y = F.conv1d(input[idx:idx+1, :number], weight, None, self.stride, self.padding, dilation=self.dilation, groups=input.shape[1]) # separable
+            y = F.conv1d(y, self.pointwise_weight[:, :number], bias) # pointwise
+            return y
+            
+        with ThreadPoolExecutor(cpu_count() // 2) as pool:
+            y = torch.cat(list(pool.map(conv_1d, range(input.shape[0]))), 0)
+        return y
+
+
+# encoder를 slimmable network로 대체
+class ConvTasNet_v3(torch.nn.Module):
+    """Conv-TasNet: a fully-convolutional time-domain audio separation network
+    *Conv-TasNet: Surpassing Ideal Time–Frequency Magnitude Masking for Speech Separation*
+    [:footcite:`Luo_2019`].
+
+    Args:
+        num_sources (int, optional): The number of sources to split.
+        enc_kernel_size (int, optional): The convolution kernel size of the encoder/decoder, <L>.
+        enc_num_feats (int, optional): The feature dimensions passed to mask generator, <N>.
+        msk_kernel_size (int, optional): The convolution kernel size of the mask generator, <P>.
+        msk_num_feats (int, optional): The input/output feature dimension of conv block in the mask generator, <B, Sc>.
+        msk_num_hidden_feats (int, optional): The internal feature dimension of conv block of the mask generator, <H>.
+        msk_num_layers (int, optional): The number of layers in one conv block of the mask generator, <X>.
+        msk_num_stacks (int, optional): The numbr of conv blocks of the mask generator, <R>.
+        msk_activate (str, optional): The activation function of the mask output (Default: ``sigmoid``).
+
+    Note:
+        This implementation corresponds to the "non-causal" setting in the paper.
+    """
+
+    def __init__(
+        self,
+        num_sources: int = 2,
+        # encoder/decoder parameters
+        enc_kernel_size: int = 16,
+        enc_num_feats: int = 512,
+        # mask generator parameters
+        msk_kernel_size: int = 3,
+        msk_num_feats: int = 128,
+        msk_num_hidden_feats: int = 512,
+        msk_num_layers: int = 8,
+        msk_num_stacks: int = 3,
+        msk_activate: str = "sigmoid",
+        distance: bool = True,
+    ):
+        super().__init__()
+
+        self.num_sources = num_sources
+        self.enc_num_feats = enc_num_feats
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_stride = enc_kernel_size // 2
+
+        self.encoder = SlimmableSeparableConv1d(
+            in_channels_max=1,
+            out_channels_max=enc_num_feats,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+        self.mask_generator = MaskGenerator(
+            input_dim=enc_num_feats,
+            output_dim = enc_num_feats,
+            num_sources=num_sources,
+            kernel_size=msk_kernel_size,
+            num_feats=msk_num_feats,
+            num_hidden=msk_num_hidden_feats,
+            num_layers=msk_num_layers,
+            num_stacks=msk_num_stacks,
+            msk_activate=msk_activate,
+        )
+        self.decoder = SlimmableConv1dTranspose(
+            in_channel_max=enc_num_feats,
+            out_channel_max=1,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+        self.emb = torch.nn.Embedding(47, 512) # 47 = 벽까지거리(최대 2m) / (343 m/s / sr(=8000))\
+
+    def _align_num_frames_with_strides(
+        self, input: torch.Tensor
+    ) -> Tuple[torch.Tensor, int]:
+        """Pad input Tensor so that the end of the input tensor corresponds with
+
+        1. (if kernel size is odd) the center of the last convolution kernel
+        or 2. (if kernel size is even) the end of the first half of the last convolution kernel
+
+        Assumption:
+            The resulting Tensor will be padded with the size of stride (== kernel_width // 2)
+            on the both ends in Conv1D
+
+        |<--- k_1 --->|
+        |      |            |<-- k_n-1 -->|
+        |      |                  |  |<--- k_n --->|
+        |      |                  |         |      |
+        |      |                  |         |      |
+        |      v                  v         v      |
+        |<---->|<--- input signal --->|<--->|<---->|
+         stride                         PAD  stride
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape (batch_size, channels==1, frames)
+
+        Returns:
+            Tensor: Padded Tensor
+            int: Number of paddings performed
+        """
+        batch_size, num_channels, num_frames = input.shape
+        is_odd = self.enc_kernel_size % 2
+        num_strides = (num_frames - is_odd) // self.enc_stride
+        num_remainings = num_frames - (is_odd + num_strides * self.enc_stride)
+        if num_remainings == 0:
+            return input, 0
+
+        num_paddings = self.enc_stride - num_remainings
+        pad = torch.zeros(
+            batch_size,
+            num_channels,
+            num_paddings,
+            dtype=input.dtype,
+            device=input.device,
+        )
+        return torch.cat([input, pad], 2), num_paddings
+
+    def forward(self, input: torch.Tensor, distance: torch.Tensor) -> torch.Tensor:
+        input = input.unsqueeze(1)
+        """Perform source separation. Generate audio source waveforms.
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
+
+        Returns:
+            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
+        """
+        if input.ndim != 3 or input.shape[1] != 1:
+            raise ValueError(
+                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
+            )
+
+        # B: batch size
+        # L: input frame length
+        # L': padded input frame length
+        # F: feature dimension
+        # M: feature frame length
+        # S: number of sources
+
+        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
+        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
+
+        # distance range 0.5 ~ 2.0 m
+        dis = distance
+        dis = torch.round(dis / 0.042875).long()
+        dis_max = torch.round(torch.ones_like(dis) * 2 / 0.042875).long()
+
+        # channel ratio 0.5 ~ 1.0: whole channel * channel ratio => used channel
+        ratio_range = [0.5, 1.]
+
+        feats = self.encoder(padded, 1 - dis / dis_max, ratio_range)  # B, F, M
+
+        mask_in_feats = feats
+            
+        masked = self.mask_generator(mask_in_feats) * feats.unsqueeze(1)  # B, S, F, M
+
+        masked = masked.view(
+            batch_size * self.num_sources, self.enc_num_feats, -1
+        )  # B*S, F, M  
+
+
+        decoded = self.decoder(masked, 1 - dis / dis_max, ratio_range)  # B*S, 1, L'
+        # decoded = self.decoder(masked)
 
         output = decoded.view(
             batch_size, self.num_sources, num_padded_frames
