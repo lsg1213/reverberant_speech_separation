@@ -32,7 +32,7 @@ def evaluate(config, model, dataset, savepath, epoch):
                         mix, sources, idx, _, clean = inputs
                     else:
                         mix, sources, idx, _, clean, distance = inputs
-                        distance = distance.to(device)
+                        distance = torch.from_numpy(distance[None]).to(device)
                     mix, sources, clean = mix.to(device), sources.to(device)[None], clean.to(device)[None]
                 else:
                     mix, clean, idx = inputs
