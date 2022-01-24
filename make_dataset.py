@@ -3,6 +3,7 @@ from multiprocessing import cpu_count
 import os
 import random
 from concurrent.futures import ThreadPoolExecutor
+import joblib
 
 import numpy as np
 import pandas as pd
@@ -80,7 +81,7 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        prefix = 'rirnorm_'
+        prefix = 'rir_'
         rir_csv_path = os.path.join(csvpath, f'{prefix}mixture_{mode}_mix_clean.csv')
         rir_metric_csv_path = os.path.join(csvpath, f'{prefix}metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
@@ -99,22 +100,22 @@ def main(config):
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
             rir_csv.at[idx, 'mixture_path'] = mixture_save_path
 
-            dis = torch.from_numpy(((rir_config['pos_src'] - rir_config['pos_rcv']) ** 2).sum(-1, keepdims=True) ** 0.5).type(sources.dtype) # distance between source and mic
             # rir cross correlation operation
             sources = sources.cpu()
             rir_function = torch.from_numpy(rir_function.squeeze()).cpu()
             a_coefficient = F.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-            rir_sources = torchaudio.functional.filtfilt(sources, a_coefficient, rir_function)
+            rir_sources = torchaudio.functional.lfilter(sources, a_coefficient, rir_function)
 
             # rir normalization
-            rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0] / dis
+            # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0] / dis
 
             snr2 = 10 ** (metric['source_2_SNR'] / 20.)
-            mixture_wave = rir_sources[:1] + rir_sources[1:] * snr2
+            mixture_wave = torch.cat([rir_sources[:1], rir_sources[1:] * snr2])
             
             # mixture save
             torchaudio.save(mixture_save_path, mixture_wave.cpu(), config.sr)
             print(mixture_save_path)
+        # list(map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
         with ThreadPoolExecutor(cpu_count() // 2) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))

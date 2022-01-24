@@ -38,38 +38,38 @@ class Test:
 
     def test_ConvTasNet_v1(self):
         config = deepcopy(self.config)
-        config.task = 'rirnorm'
+        config.task = 'rir'
         config.model = 'v1'
         self.make_testdataset(config)
         model = ConvTasNet_v1().to(self.device)
-        for mix, _, _, _, clean_sep, distance in self.testset:
+        for rev_sep, clean_sep, _, distance in self.testset:
             distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = mix[None].to(self.device)
+            mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
             assert results.shape == clean_sep[None].shape
 
     def test_ConvTasNet_v2(self):
         config = deepcopy(self.config)
-        config.task = 'rirnorm'
+        config.task = 'rir'
         config.model = 'v2'
         self.make_testdataset(config)
         model = ConvTasNet_v2(reverse=True).to(self.device)
-        for mix, _, _, _, clean_sep, distance in self.testset:
+        for rev_sep, clean_sep, _, distance in self.testset:
             distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = mix[None].to(self.device)
+            mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
             assert results.shape == clean_sep[None].shape
 
     
     def test_ConvTasNet_v3(self):
         config = deepcopy(self.config)
-        config.task = 'rirnorm'
+        config.task = 'rir'
         config.model = 'v3'
         self.make_testdataset(config)
         model = ConvTasNet_v3(distance=True).to(self.device)
-        for mix, _, _, _, clean_sep, distance in self.testset:
+        for rev_sep, clean_sep, _, distance in self.testset:
             distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = mix[None].to(self.device)
+            mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
             assert results.shape == clean_sep[None].shape
 

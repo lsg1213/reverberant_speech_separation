@@ -20,6 +20,7 @@ def get_args():
     args.add_argument('--tensorboard_path', type=str, default='tensorboard_log')
     args.add_argument('--gpus', type=str, default='-1')
     args.add_argument('--resume', action='store_true')
-    args.add_argument('--norm', action='store_true')
+    args.add_argument('--norm', type=bool, default=True)
+    # args.add_argument('--norm', action='store_true')
     return args.parse_args()
     

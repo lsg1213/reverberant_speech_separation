@@ -102,7 +102,7 @@ class LibriMix(Dataset):
         self.mixture_path = mixture_path
         sources_list = []
         if 'rir' in self.task:
-            cs_source_list = []
+            rev_source_list = []
         # If there is a seg start point is set randomly
         if self.seg_len is not None:
             start = random.randint(0, row["length"] - self.seg_len)
@@ -119,50 +119,29 @@ class LibriMix(Dataset):
         else:
             # Read sources
             for i in range(self.n_src):
-                if 'rir' in self.task:
-                    clean_source_path = self.df_answer.iloc[idx][f"source_{i + 1}_path"]
                 source_path = row[f"source_{i + 1}_path"]
-                if 'rir' in self.task:
-                    cs, _ = sf.read(clean_source_path, dtype="float32", start=start, stop=stop)
-                    cs_source_list.append(cs)
                 s, _ = sf.read(source_path, dtype="float32", start=start, stop=stop)
                 sources_list.append(s)
         # Read the mixture
-        if 'rir' in self.task:
-            clean_mixture_path = self.df_answer.iloc[idx]['mixture_path']
-            clean_mixture, _ = sf.read(clean_mixture_path, dtype='float32', start=start, stop=stop)
-            clean_mixture = torch.from_numpy(clean_mixture)
         mixture, _ = sf.read(mixture_path, dtype="float32", start=start, stop=stop)
         # Convert to torch tensor
         mixture = torch.from_numpy(mixture)
+
         # Stack sources
-        sources = np.vstack(sources_list)
-        if 'rir' in self.task:
-            cs_source_list = torch.from_numpy(np.vstack(cs_source_list))
+        clean_sep = np.vstack(sources_list)
+
         # Convert sources to tensor
-        sources = torch.from_numpy(sources)
+        clean_sep = torch.from_numpy(clean_sep)
 
         if self.config.model == '':
-            if 'rir' in self.task:
-                if not self.return_id:
-                    return mixture, sources, clean_mixture, cs_source_list
-                # 5400-34479-0005_4973-24515-0007.wav
-                id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-                return mixture, sources, [id1, id2], clean_mixture, cs_source_list
             if not self.return_id:
-                return mixture, sources
+                return mixture, clean_sep
             # 5400-34479-0005_4973-24515-0007.wav
             id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-            return mixture, sources, [id1, id2]
+            return mixture, clean_sep, [id1, id2]
         else:
-            if 'rir' in self.task:
-                if not self.return_id:
-                    return mixture, sources, clean_mixture, cs_source_list, self.dis_csv.iloc[idx]['distance']
-                # 5400-34479-0005_4973-24515-0007.wav
-                id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-                return mixture, sources, [id1, id2], clean_mixture, cs_source_list, self.dis_csv.iloc[idx]['distance']
             if not self.return_id:
-                return mixture, sources, self.dis_csv.iloc[idx]['distance']
+                return mixture, clean_sep, self.dis_csv.iloc[idx]['distance']
             # 5400-34479-0005_4973-24515-0007.wav
             id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-            return mixture, sources, [id1, id2], self.dis_csv.iloc[idx]['distance']
+            return mixture, clean_sep, [id1, id2], self.dis_csv.iloc[idx]['distance']

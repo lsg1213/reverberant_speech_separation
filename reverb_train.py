@@ -46,14 +46,14 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             if config.model == '':
-                mix, rev_clean, cleanmix, clean = inputs
+                mix, clean = inputs
             else:
-                mix, rev_clean, cleanmix, clean, distance = inputs
+                mix, clean, distance = inputs
                 distance = distance.to(device)
-            mix = mix.to(device)
-            rev_clean = rev_clean.to(device)
-            cleanmix = cleanmix.to(device)
-            clean = clean.to(device)
+            rev_sep = mix.to(device).transpose(1,2)
+            clean_sep = clean.to(device)
+            mix = rev_sep.sum(1)
+            cleanmix = clean_sep.sum(1)
 
             if config.norm:
                 mix_std = mix.std(-1, keepdim=True)
@@ -76,8 +76,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if config.norm:
                 logits = logits * mix_std + mix_mean
                 clean_logits = clean_logits * clean_std + clean_mean
-            rev_loss = criterion(logits, rev_clean)
-            clean_loss = criterion(clean_logits, clean)
+            rev_loss = criterion(logits, rev_sep)
+            clean_loss = criterion(clean_logits, clean_sep)
             loss = rev_loss + clean_loss
 
             if mode == 'train':
@@ -182,22 +182,22 @@ def main(config):
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif config.model == 'v1':
-        model = ConvTasNet_v1(distance=True)
+        model = ConvTasNet_v1()
     elif config.model == 'v2':
-        model = ConvTasNet_v2(distance=True)
+        model = ConvTasNet_v2(reverse='reverse' in config.name)
     elif config.model == 'v3':
         model = ConvTasNet_v3(distance=True)
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=5, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
 
     callbacks = []
-    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=30, verbose=True))
+    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     def mseloss():
