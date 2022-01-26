@@ -109,6 +109,8 @@ def main(config):
 
             label_save_path = rir_csv.iloc[idx]['mixture_path'].replace(f'{prefix}mix_clean', f'{prefix}label_clean')
             makedir('/'.join(label_save_path.split('/')[:-1]))
+            print(label_save_path)
+            rir_csv.at[idx, 'label_path'] = label_save_path
 
             # rir cross correlation operation
             sources = sources.cpu()
@@ -133,6 +135,7 @@ def main(config):
         # list(map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc)))) # for debug
 
         with ThreadPoolExecutor(cpu_count() // 4) as pool:
+        # with ThreadPoolExecutor(2) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
         rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)

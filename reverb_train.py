@@ -51,7 +51,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 mix, clean, distance = inputs
                 distance = distance.to(device)
             rev_sep = mix.to(device).transpose(1,2)
-            clean_sep = clean.to(device)
+            clean_sep = clean.to(device).transpose(1,2)
             mix = rev_sep.sum(1)
             cleanmix = clean_sep.sum(1)
 
@@ -76,7 +76,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if config.norm:
                 logits = logits * mix_std + mix_mean
                 clean_logits = clean_logits * clean_std + clean_mean
-            rev_loss = criterion(logits, rev_sep)
+            rev_loss = criterion(logits, clean_sep)
             clean_loss = criterion(clean_logits, clean_sep)
             loss = rev_loss + clean_loss
 
@@ -94,8 +94,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
             writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
             if mode == 'val':
-                input_score = - metric(torch.stack([mix, mix], 1), clean)
-                output_score = - metric(logits, clean)
+                input_score = - metric(torch.stack([mix, mix], 1), clean_sep)
+                output_score = - metric(logits, clean_sep)
                 score = output_score - input_score
                 scores.append(score.tolist())
                 progress_bar_dict['input_score'] = np.mean(input_score.tolist())
@@ -186,7 +186,7 @@ def main(config):
     elif config.model == 'v2':
         model = ConvTasNet_v2(reverse='reverse' in config.name)
     elif config.model == 'v3':
-        model = ConvTasNet_v3(distance=True)
+        model = ConvTasNet_v3(reverse='reverse' in config.name)
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -205,7 +205,8 @@ def main(config):
             return MSELoss(reduction='none')(logit, answer).mean(-1, keepdim=True)
         return _mseloss
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    # criterion = PITLossWrapper(mseloss(), pit_from="pw_mtx")
+    if 'mse' in config.name:
+        criterion = PITLossWrapper(mseloss(), pit_from="pw_mtx")
     
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))

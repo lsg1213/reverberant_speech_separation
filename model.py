@@ -343,7 +343,6 @@ class ConvTasNet_v2(ConvTasNet):
             padding=self.enc_stride,
             bias=False,
         )
-        self.emb = torch.nn.Embedding(47, 512) # 47 = 벽까지거리(최대 2m) / (343 m/s / sr(=8000))\
 
     def forward(self, input: torch.Tensor, distance: torch.Tensor) -> torch.Tensor:
         input = input.unsqueeze(1)
@@ -472,7 +471,7 @@ class ConvTasNet_v3(ConvTasNet):
         msk_num_layers: int = 8,
         msk_num_stacks: int = 3,
         msk_activate: str = "sigmoid",
-        distance: bool = True,
+        reverse: bool = True,
     ):
         super(ConvTasNet_v3, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
 
@@ -480,6 +479,7 @@ class ConvTasNet_v3(ConvTasNet):
         self.enc_num_feats = enc_num_feats
         self.enc_kernel_size = enc_kernel_size
         self.enc_stride = enc_kernel_size // 2
+        self.reverse = reverse
 
         self.encoder = SlimmableSeparableConv1d(
             in_channels_max=1,
@@ -508,7 +508,6 @@ class ConvTasNet_v3(ConvTasNet):
             padding=self.enc_stride,
             bias=False,
         )
-        self.emb = torch.nn.Embedding(47, 512) # 47 = 벽까지거리(최대 2m) / (343 m/s / sr(=8000))\
 
     def forward(self, input: torch.Tensor, distance: torch.Tensor) -> torch.Tensor:
         input = input.unsqueeze(1)
@@ -539,6 +538,7 @@ class ConvTasNet_v3(ConvTasNet):
         dis = distance
         dis = torch.round(dis / 0.042875).long()
         dis_max = torch.round(torch.ones_like(dis) * 2 / 0.042875).long()
+        dis_ratio = 1 - dis / dis_max if self.reverse else dis / dis_max
 
         # channel ratio 0.5 ~ 1.0: whole channel * channel ratio => used channel
         ratio_range = [0.5, 1.]

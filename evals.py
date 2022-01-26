@@ -27,16 +27,14 @@ def evaluate(config, model, dataset, savepath, epoch):
     with torch.no_grad():
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
             for inputs in pbar:
-                if 'rir' in dataset.task:
-                    if config.model == '':
-                        mix, sources, idx, _, clean = inputs
-                    else:
-                        mix, sources, idx, _, clean, distance = inputs
-                        distance = torch.from_numpy(distance[None]).to(device)
-                    mix, sources, clean = mix.to(device), sources.to(device)[None], clean.to(device)[None]
-                else:
+                if config.model == '':
                     mix, clean, idx = inputs
-                    mix, clean = mix.to(device), clean.to(device)[None]
+                else:
+                    mix, clean, idx, distance = inputs
+                    distance = distance.to(device)
+                rev_sep = mix.to(device).transpose(1,2)
+                clean_sep = clean.to(device).transpose(1,2)
+                mix = rev_sep.sum(1)
 
                 if config.norm:
                     mix_std = mix.std(-1, keepdim=True)
@@ -55,14 +53,14 @@ def evaluate(config, model, dataset, savepath, epoch):
 
                 mixcat = torch.stack([mix, mix], 0).unsqueeze(0)
 
-                si_snr = criterion(logits, clean, return_est=True if 'rir' not in dataset.task else False)
-                input_si_snr = criterion(mixcat, clean)
+                si_snr = criterion(logits, clean_sep, return_est=True if 'rir' not in dataset.task else False)
+                input_si_snr = criterion(mixcat, clean_sep)
                 if 'rir' not in dataset.task:
                     si_snr, reordered_sources = si_snr
                 si_snri = - (si_snr - input_si_snr).tolist()
                 if 'rir' in dataset.task:
-                    si_sdr, reordered_sources = criterion(logits, sources, return_est=True)
-                    input_si_sdr = criterion(mixcat, sources)
+                    si_sdr, reordered_sources = criterion(logits, rev_sep, return_est=True)
+                    input_si_sdr = criterion(mixcat, rev_sep)
                     si_sdri = - (si_sdr - input_si_sdr).tolist() # loss is - si-sdr
                 else:
                     si_sdri = si_snri

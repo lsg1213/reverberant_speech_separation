@@ -101,8 +101,7 @@ class LibriMix(Dataset):
         mixture_path = row["mixture_path"]
         self.mixture_path = mixture_path
         sources_list = []
-        if 'rir' in self.task:
-            rev_source_list = []
+
         # If there is a seg start point is set randomly
         if self.seg_len is not None:
             start = random.randint(0, row["length"] - self.seg_len)
@@ -118,20 +117,13 @@ class LibriMix(Dataset):
 
         else:
             # Read sources
-            for i in range(self.n_src):
-                source_path = row[f"source_{i + 1}_path"]
-                s, _ = sf.read(source_path, dtype="float32", start=start, stop=stop)
-                sources_list.append(s)
+            source_path = row["label_path"]
+            s, _ = sf.read(source_path, dtype="float32", start=start, stop=stop)
+            clean_sep = torch.from_numpy(s)
         # Read the mixture
         mixture, _ = sf.read(mixture_path, dtype="float32", start=start, stop=stop)
         # Convert to torch tensor
         mixture = torch.from_numpy(mixture)
-
-        # Stack sources
-        clean_sep = np.vstack(sources_list)
-
-        # Convert sources to tensor
-        clean_sep = torch.from_numpy(clean_sep)
 
         if self.config.model == '':
             if not self.return_id:
