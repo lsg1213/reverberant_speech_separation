@@ -5,7 +5,7 @@ from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 from asteroid.dsp.normalization import normalize_estimates
 import torch
 from tqdm import tqdm
-from numpy import mean
+from numpy import float64, mean, ndarray
 import soundfile as sf
 
 from utils import get_device, makedir
@@ -31,9 +31,13 @@ def evaluate(config, model, dataset, savepath, epoch):
                     mix, clean, idx = inputs
                 else:
                     mix, clean, idx, distance = inputs
+                    if not isinstance(distance, torch.Tensor):
+                        if not isinstance(distance, ndarray):
+                            distance = distance[None]
+                        distance = torch.from_numpy(distance)
                     distance = distance.to(device)
-                rev_sep = mix.to(device).transpose(1,2)
-                clean_sep = clean.to(device).transpose(1,2)
+                rev_sep = mix[None].to(device).transpose(1,2)
+                clean_sep = clean[None].to(device).transpose(1,2)
                 mix = rev_sep.sum(1)
 
                 if config.norm:
@@ -44,14 +48,14 @@ def evaluate(config, model, dataset, savepath, epoch):
                     mix_mean = mix_mean.unsqueeze(1)
 
                 if config.model == '':
-                    logits = model(mix.unsqueeze(0))
+                    logits = model(mix)
                 else:
-                    logits = model(mix.unsqueeze(0), distance)
+                    logits = model(mix, distance)
 
                 if config.norm:
                     logits = logits * mix_std + mix_mean
 
-                mixcat = torch.stack([mix, mix], 0).unsqueeze(0)
+                mixcat = torch.stack([mix, mix], 1)
 
                 si_snr = criterion(logits, clean_sep, return_est=True if 'rir' not in dataset.task else False)
                 input_si_snr = criterion(mixcat, clean_sep)
