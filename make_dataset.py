@@ -59,10 +59,14 @@ def get_RIR(config):
     distance_limit_between_src_rcv = 0.5 # 0.5 m
 
     room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
+    # idx = random.randint(0,2)
+    # room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
+    # T60= [0.3,0.6,0.9][idx]
 
     pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
     pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
-    while (((pos_src - pos_rcv)**2).sum(-1) ** 0.5 < distance_limit_between_src_rcv).sum() > 0:
+    while ((((pos_src - pos_rcv)**2).sum(-1) ** 0.5 < distance_limit_between_src_rcv).sum() > 0) or \
+          ((pos_src[:,-1] > 2).sum() + (pos_src[:,-1] < 1).sum() > 0):
         pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
         pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
 
@@ -82,6 +86,7 @@ def get_RIR(config):
 
 def main(config):
     modes = ['train-360', 'dev', 'test']
+    # modes = ['dev', 'test']
     csvpath = os.path.join(config.datapath, 'metadata')
     
     for mode in modes:
@@ -121,7 +126,7 @@ def main(config):
             rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function)
             
             # rir normalization
-            # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0] / dis
+            # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0]
 
             snr2 = 10 ** (metric['source_2_SNR'] / 20.)
             mixture_wave = torch.cat([rir_sources[:1], rir_sources[1:] * snr2])
@@ -135,7 +140,6 @@ def main(config):
         # list(map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc)))) # for debug
 
         with ThreadPoolExecutor(cpu_count() // 4) as pool:
-        # with ThreadPoolExecutor(2) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
         rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)
