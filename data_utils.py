@@ -114,7 +114,6 @@ class LibriMix(Dataset):
             mix_clean_path = self.df_clean.iloc[idx]["mixture_path"]
             s, _ = sf.read(mix_clean_path, dtype="float32", start=start, stop=stop)
             sources_list.append(s)
-
         else:
             # Read sources
             source_path = row["label_path"]
