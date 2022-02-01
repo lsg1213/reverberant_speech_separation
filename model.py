@@ -676,11 +676,75 @@ class ConvTasNet_feedback(ConvTasNet):
         return output
 
 
+import torch
+from torch import nn
+
+from asteroid import torch_utils
+from asteroid import torch_utils
+from asteroid_filterbanks import Encoder, Decoder, FreeFB
+from asteroid.masknn.recurrent import SingleRNN
+from asteroid.engine.optimizers import make_optimizer
+from asteroid.masknn.norms import GlobLN
+
+
+class TasNet(nn.Module):
+    """Some kind of TasNet, but not the original one
+    Differences:
+        - Overlap-add support (strided convolutions)
+        - No frame-wise normalization on the wavs
+        - GlobLN as bottleneck layer.
+        - No skip connection.
+    Args:
+        fb_conf (dict): see local/conf.yml
+        mask_conf (dict): see local/conf.yml
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.n_src = 2
+        self.n_filters = 512
+        # Create TasNet encoders and decoders (could use nn.Conv1D as well)
+        self.encoder_sig = Encoder(FreeFB(512, 40, 20))
+        self.encoder_relu = Encoder(FreeFB(512, 40, 20))
+        self.decoder = Decoder(FreeFB(512, 40, 20))
+        self.bn_layer = GlobLN(512)
+
+        # Create TasNet masker
+        self.masker = nn.Sequential(
+            SingleRNN(
+                "lstm",
+                512,
+                hidden_size=600,
+                n_layers=4,
+                bidirectional=True,
+                dropout=0.3,
+            ),
+            nn.Linear(2 * 600, self.n_src * self.n_filters),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x, distance):
+        batch_size = x.shape[0]
+        if len(x.shape) == 2:
+            x = x.unsqueeze(1)
+        tf_rep = self.encode(x)
+        to_sep = self.bn_layer(tf_rep)
+        est_masks = self.masker(to_sep.transpose(-1, -2)).transpose(-1, -2)
+        est_masks = est_masks.view(batch_size, self.n_src, self.n_filters, -1)
+        masked_tf_rep = tf_rep.unsqueeze(1) * est_masks
+        return torch_utils.pad_x_to_y(self.decoder(masked_tf_rep), x)
+
+    def encode(self, x):
+        relu_out = torch.relu(self.encoder_relu(x))
+        sig_out = torch.sigmoid(self.encoder_sig(x))
+        return sig_out * relu_out
+
+
 if __name__ == '__main__':
     from torchsummary import summary
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ConvTasNet_v1().to(device)
+    model = TasNet().to(device)
     mix = torch.rand((2,24000), dtype=torch.float32, device=device)
     distance = torch.rand((2,1), dtype=torch.float32, device=device)
-    aa = model(mix, distance)
+    aa = model(mix)
     print(aa.shape)
