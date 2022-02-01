@@ -21,7 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3
+from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet
 
 
 def minmaxnorm(data):
@@ -94,7 +94,9 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
             writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
             if mode == 'val':
-                input_score = - metric(torch.stack([mix, mix], 1), clean_sep)
+                mix = rev_sep.sum(1)
+                mixcat = torch.stack([mix, mix], 1)
+                input_score = - metric(mixcat, clean_sep)
                 output_score = - metric(logits, clean_sep)
                 score = output_score - input_score
                 scores.append(score.tolist())
@@ -187,9 +189,9 @@ def main(config):
         model = ConvTasNet_v2(reverse='reverse' in config.name)
     elif config.model == 'v3':
         model = ConvTasNet_v3(reverse='reverse' in config.name)
+    elif config.model == 'tas':
+        model = TasNet()
 
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
 
@@ -202,11 +204,11 @@ def main(config):
     metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     def mseloss():
         def _mseloss(logit, answer):
-            return MSELoss(reduction='none')(logit, answer).mean(-1, keepdim=True)
+            return MSELoss(reduction='none')(logit, answer)
         return _mseloss
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     if 'mse' in config.name:
-        criterion = PITLossWrapper(mseloss(), pit_from="pw_mtx")
+        criterion = MSELoss()
     
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
@@ -220,6 +222,8 @@ def main(config):
             if state is not None:
                 callback.load_state_dict(state)
 
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
     model = model.to(device)
     for epoch in range(init_epoch, config.epoch):
         print(f'--------------- epoch: {epoch} ---------------')

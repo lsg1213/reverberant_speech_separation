@@ -39,6 +39,7 @@ def evaluate(config, model, dataset, savepath, epoch):
                 rev_sep = mix[None].to(device).transpose(1,2)
                 clean_sep = clean[None].to(device).transpose(1,2)
                 mix = rev_sep.sum(1)
+                mixcat = torch.stack([mix, mix], 1)
 
                 if config.norm:
                     mix_std = mix.std(-1, keepdim=True)
@@ -54,8 +55,6 @@ def evaluate(config, model, dataset, savepath, epoch):
 
                 if config.norm:
                     logits = logits * mix_std + mix_mean
-
-                mixcat = torch.stack([mix, mix], 1)
 
                 si_snr = criterion(logits, clean_sep, return_est=True if 'rir' not in dataset.task else False)
                 input_si_snr = criterion(mixcat, clean_sep)
