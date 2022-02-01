@@ -103,10 +103,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 progress_bar_dict['input_score'] = np.mean(input_score.tolist())
                 progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
-                writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
-                writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_score.tolist()), epoch)
-                writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_score.tolist()), epoch)
             pbar.set_postfix(progress_bar_dict)
+    writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
+    writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_score.tolist()), epoch)
+    writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_score.tolist()), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
@@ -240,8 +240,14 @@ def main(config):
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
+                if torch.cuda.device_count() > 1:
+                    model_state = {}
+                    for k, v in model.state_dict().items():
+                        model_state[k[8:]] = v
+                else:
+                    model_state = model.state_dict()
                 callback.elements.update({
-                    'model': model.state_dict(),
+                    'model': model_state,
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
                     'epoch': epoch
