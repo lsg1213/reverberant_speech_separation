@@ -1,5 +1,6 @@
 from argparse import ArgumentError
 import os
+from turtle import forward
 
 from args import get_args
 from multiprocessing import cpu_count
@@ -122,22 +123,50 @@ class MaskGenerator(torch.nn.Module):
         return output.view(batch_size, self.num_sources, self.output_dim, -1)
 
 
-def lfilter(signal, filter):
-    '''
-        signal (batch, signal_num, time),
-        filter (batch, filter_num, filter)
-    '''
-    batch = signal.shape[0]
-    feat = signal.shape[1]
-    filter = filter.flip(-1)
-    signal = F.pad(signal, (filter.shape[-1] - 1, 0))
+# def lfilter(signal, rawfilter):
+#     '''
+#         signal (batch, signal_num, time),
+#         filter (batch, filter_num, filter)
+#     '''
+#     batch = signal.shape[0]
+#     feat = signal.shape[1]
+#     filter = rawfilter.flip(-1)
+#     padsignal = F.pad(signal, (filter.shape[-1] - 1, 0))
 
-    signal = signal.reshape((-1, signal.shape[-1]))
-    filter = filter.reshape((-1, filter.shape[-1]))
-    out = F.conv1d(signal.unsqueeze(0), filter.unsqueeze(1), groups=signal.shape[0]).squeeze(0)
-    out = out.reshape((batch, feat, -1))
-    return out
-    
+#     padsignal = padsignal.reshape((-1, padsignal.shape[-1]))
+#     filter = filter.reshape((-1, filter.shape[-1]))
+#     out = F.conv1d(padsignal.unsqueeze(0), filter.unsqueeze(1), groups=padsignal.shape[0]).squeeze(0)
+
+#     out = out.reshape((batch, feat, -1))
+#     return out
+
+class Lfilter(torch.nn.Module):
+    def __init__(self, hidden_channel, kernel_size) -> None:
+        super().__init__()
+        self.hidden_channel = hidden_channel
+        self.kernel_size = kernel_size
+
+        self.conv2d_1 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size), bias=False)
+        self.conv2d_2 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 2), dilation=(1,2), bias=False)
+        self.conv2d_3 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 4), dilation=(1,4), bias=False)
+        self.conv2d_4 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 8), dilation=(1,8), bias=False)
+
+    def pad_for_lfilter(self, signal, filter_length):
+        return F.pad(signal, (filter_length - 1, 0))
+
+    def forward(self, input: torch.Tensor):
+        time = input.shape[-1]
+        input = self.pad_for_lfilter(input, self.kernel_size)
+
+        input = input.flip(-1).unsqueeze(1)
+
+        out1 = self.conv2d_1(input)[..., :time]
+        out2 = self.conv2d_2(input)[..., :time]
+        out3 = self.conv2d_3(input)[..., :time]
+        out4 = self.conv2d_4(input)[..., :time]
+        out = torch.cat([out1, out2, out3, out4], 1)
+        return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
+
 
 class DeSepNet(ConvTasNet):
     def __init__(
@@ -181,12 +210,14 @@ class DeSepNet(ConvTasNet):
             msk_activate=msk_activate,
         )
         # 8000(sampling rate) * 0.5(T60 maximum value) / 8(encoded feature resolution)
-        rir_func_length = np.ceil(8000 * 0.5 / 8).astype(np.int32)
-        self.rir_function_generator = torch.nn.ModuleList([
-            torch.nn.Linear(3001, 1024),
-            torch.nn.Linear(1024, rir_func_length * 2),
-            torch.nn.Linear(rir_func_length * 2, rir_func_length),
-        ])
+        rir_func_length = np.ceil(8000 * 0.1 / 8).astype(np.int32)
+        # self.rir_function_generator = torch.nn.ModuleList([
+        #     torch.nn.Linear(3001, 1024),
+        #     torch.nn.Linear(1024, rir_func_length * 2),
+        #     torch.nn.Linear(rir_func_length * 2, rir_func_length),
+        # ])
+        self.lfilter = Lfilter(16, rir_func_length)
+
         self.decoder = torch.nn.ConvTranspose1d(
             in_channels=enc_num_feats,
             out_channels=1,
@@ -224,9 +255,10 @@ class DeSepNet(ConvTasNet):
 
         # rir predictor
         rirfeats = feats
-        for layer in self.rir_function_generator:
-            rirfeats = layer(rirfeats)
-        dereverb_feats = lfilter(feats, rirfeats)
+        # for layer in self.rir_function_generator:
+        #     rirfeats = layer(rirfeats)
+        # dereverb_feats = lfilter(feats, rirfeats)
+        dereverb_feats = self.lfilter(rirfeats)
 
         mask_in_feats = dereverb_feats
         masked = self.mask_generator(mask_in_feats) * dereverb_feats.unsqueeze(1)  # B, S, F, M
@@ -273,6 +305,8 @@ def iterloop(config, writer, epoch, model: DeSepNet, criterion, dataloader, metr
     device = get_device()
     losses = []
     scores = []
+    input_scores = []
+    output_scores = []
     rev_losses = []
     sep_losses = []
     with tqdm(dataloader) as pbar:
@@ -300,7 +334,11 @@ def iterloop(config, writer, epoch, model: DeSepNet, criterion, dataloader, metr
                 rev_logits = rev_logits * mix_std + mix_mean
             rev_loss = criterion(logits, clean_sep)
             sep_loss = criterion(rev_logits, rev_sep)
-            loss = rev_loss + sep_loss
+
+            alpha = rev_loss.item() - sep_loss.item()
+            loss = np.clip(alpha, 1, 5) * rev_loss + sep_loss
+            # loss = rev_loss + sep_loss
+
 
             if mode == 'train':
                 optimizer.zero_grad()
@@ -322,21 +360,25 @@ def iterloop(config, writer, epoch, model: DeSepNet, criterion, dataloader, metr
                 output_score = - metric(logits, clean_sep)
                 score = output_score - input_score
                 scores.append(score.tolist())
+                input_scores.append(input_score.tolist())
+                output_scores.append(output_score.tolist())
                 progress_bar_dict['input_score'] = np.mean(input_score.tolist())
                 progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
-    writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
-    writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_score.tolist()), epoch)
-    writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_score.tolist()), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
+        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
+        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
+        writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
         return np.mean(losses), np.mean(scores)
 
 
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
+    gpu_num = torch.cuda.device_count()
+    config.batch *= max(gpu_num, 1)
     config.model = 'desep'
     name = 'desep_' + (config.model if config.model is not '' else 'baseline')
     name += f'_{config.batch}'
@@ -361,7 +403,6 @@ def main(config):
     init_epoch = 0
     final_epoch = 0
     
-    gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
@@ -457,7 +498,7 @@ def main(config):
                 if torch.cuda.device_count() > 1:
                     model_state = {}
                     for k, v in model.state_dict().items():
-                        model_state[k[8:]] = v
+                        model_state[k[7:]] = v
                 else:
                     model_state = model.state_dict()
                 callback.elements.update({

@@ -24,6 +24,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     device = get_device()
     losses = []
     scores = []
+    input_scores = []
+    output_scores = []
     with tqdm(dataloader) as pbar:
         for mix, clean in pbar:
             mix = mix.to(device)
@@ -57,16 +59,18 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 output_score = - metric(logits, clean)
                 score = output_score - input_score
                 scores.append(score.tolist())
+                input_scores.append(input_score.tolist())
+                output_scores.append(output_score.tolist())
                 progress_bar_dict['input_score'] = np.mean(input_score.tolist())
                 progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
-    writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
-    writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_score.tolist()), epoch)
-    writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_score.tolist()), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
+        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
+        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
+        writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
         return np.mean(losses), np.mean(scores)
 
 
@@ -174,7 +178,7 @@ def main(config):
                 if torch.cuda.device_count() > 1:
                     model_state = {}
                     for k, v in model.state_dict().items():
-                        model_state[k[8:]] = v
+                        model_state[k[7:]] = v
                 else:
                     model_state = model.state_dict()
                 callback.elements.update({
