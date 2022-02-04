@@ -59,9 +59,9 @@ def get_RIR(config):
     distance_limit_between_src_rcv = 0.5 # 0.5 m
 
     room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
-    # idx = random.randint(0,2)
-    # room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
-    # T60= [0.3,0.6,0.9][idx]
+    idx = random.randint(0,2)
+    room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
+    T60= [0.3,0.6,0.9][idx]
 
     pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
     pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
@@ -70,7 +70,7 @@ def get_RIR(config):
         pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
         pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
 
-    T60 = random.random() * (T60[1] - T60[0]) + T60[0]
+    # T60 = random.random() * (T60[1] - T60[0]) + T60[0]
 
     beta = gpuRIR.beta_SabineEstimation(room_sz, T60) # Reflection coefficients
     Tdiff= gpuRIR.att2t_SabineEstimator(att_diff, T60) # Time to start the diffuse reverberation model [s]
@@ -93,7 +93,7 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        prefix = 'rir_'
+        prefix = 'rir3_'
         rir_csv_path = os.path.join(csvpath, f'{prefix}mixture_{mode}_mix_clean.csv')
         rir_metric_csv_path = os.path.join(csvpath, f'{prefix}metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
@@ -107,23 +107,19 @@ def main(config):
             rir_function, rir_config, distance, clean_rir_function = get_RIR(config)
             rir_configs.append(rir_config)
             distances.append(distance)
-            
             mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
-            rir_csv.at[idx, 'mixture_path'] = mixture_save_path
 
             label_save_path = rir_csv.iloc[idx]['mixture_path'].replace(f'{prefix}mix_clean', f'{prefix}label_clean')
             makedir('/'.join(label_save_path.split('/')[:-1]))
-            print(label_save_path)
-            rir_csv.at[idx, 'label_path'] = label_save_path
 
             # rir cross correlation operation
             sources = sources.cpu()
             rir_function = torch.from_numpy(rir_function.squeeze()).cpu()
             clean_rir_function = torch.from_numpy(clean_rir_function.squeeze()).cpu()
             a_coefficient = F.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function)
-            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function)
+            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function, clamp=False)
+            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function, clamp=False)
             
             # rir normalization
             # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0]
@@ -142,6 +138,15 @@ def main(config):
         with ThreadPoolExecutor(cpu_count() // 4) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
 
+        for idx, (metric, mixture) in enumerate(zip(metric_csv.iloc, mixture_csv.iloc)):
+            mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
+            makedir('/'.join(mixture_save_path.split('/')[:-1]))
+            rir_csv.at[idx, 'mixture_path'] = mixture_save_path
+
+            label_save_path = rir_csv.iloc[idx]['mixture_path'].replace(f'{prefix}mix_clean', f'{prefix}label_clean')
+            makedir('/'.join(label_save_path.split('/')[:-1]))
+            rir_csv.at[idx, 'label_path'] = label_save_path
+            
         rir_csv = pd.concat([rir_csv, pd.DataFrame(rir_configs)], 1)
         rir_metric_csv['distance'] = distances
 
