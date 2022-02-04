@@ -69,6 +69,9 @@ class LibriMix(Dataset):
         elif task == "sep_noisy":
             md_file = [f for f in os.listdir(csv_dir) if "both" in f][0]
             self.csv_path = os.path.join(self.csv_dir, md_file)
+        else:
+            md_file = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f and f'{task}_' in f][0]
+            self.csv_path = os.path.join(self.csv_dir, md_file)
         self.segment = segment
         self.sample_rate = sample_rate
         # Open csv file

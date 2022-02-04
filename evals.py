@@ -81,7 +81,7 @@ def evaluate(config, model, dataset, savepath, epoch):
                     makedir(local_save_dir)
                     sf.write(os.path.join(local_save_dir, f"{idx}_mixture.wav"), mix_np, config.sr)
                     # Loop over the sources and estimates
-                    for src_idx, src in enumerate(sources[0]):
+                    for src_idx, src in enumerate(clean[0]):
                         sf.write(os.path.join(local_save_dir, f"s{src_idx}.wav"), src.cpu().numpy(), config.sr)
                     for src_idx, est_src in enumerate(est_sources_np_normalized):
                         sf.write(
