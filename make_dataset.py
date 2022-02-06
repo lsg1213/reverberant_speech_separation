@@ -2,6 +2,7 @@ import argparse
 from multiprocessing import cpu_count
 import os
 import random
+import json
 from concurrent.futures import ThreadPoolExecutor
 import joblib
 
@@ -27,6 +28,7 @@ args.add_argument('--d', type=str, default='3,10')
 args.add_argument('--h', type=str, default='2.5,4')
 args.add_argument('--T60', type=str, default='0.1,0.5')
 args.add_argument('--snr', type=float, default=5)
+args.add_argument('--roomnum', type=int, default=-1)
 
 config = args.parse_args()
 os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
@@ -58,11 +60,13 @@ def get_RIR(config):
     limit = 0.5 # 벽면에서부터 거리
     distance_limit_between_src_rcv = 0.5 # 0.5 m
 
-    room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
-    # idx = random.randint(0,2)
-    idx = 0
-    room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
-    T60= [0.3,0.6,0.9][idx]
+    if config.roomnum == -1:
+        T60 = random.random() * (T60[1] - T60[0]) + T60[0]
+        room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
+    else:
+        idx = random.randint(0, config.roomnum - 1)
+        room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
+        T60= [0.3,0.6,0.9][idx]
 
     pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
     pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
@@ -71,7 +75,6 @@ def get_RIR(config):
         pos_src = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.nsrc)])
         pos_rcv = np.array([get_source_position(room_sz, limit=limit) for _ in range(config.mic)])
 
-    # T60 = random.random() * (T60[1] - T60[0]) + T60[0]
 
     beta = gpuRIR.beta_SabineEstimation(room_sz, T60) # Reflection coefficients
     Tdiff= gpuRIR.att2t_SabineEstimator(att_diff, T60) # Time to start the diffuse reverberation model [s]
@@ -94,7 +97,8 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        prefix = 'rir1_'
+        prefix_num = config.roomnum if config.roomnum != -1 else ''
+        prefix = f'rir{prefix_num}_'
         rir_csv_path = os.path.join(csvpath, f'{prefix}mixture_{mode}_mix_clean.csv')
         rir_metric_csv_path = os.path.join(csvpath, f'{prefix}metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
@@ -113,6 +117,11 @@ def main(config):
 
             label_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}label_clean')
             makedir('/'.join(label_save_path.split('/')[:-1]))
+            
+            # config_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}configs')
+            # config_save_path = config_save_path.replace('.wav', '.json')
+            # makedir('/'.join(config_save_path.split('/')[:-1]))
+            # joblib.dump(rir_config, config_save_path)
 
             # rir cross correlation operation
             sources = sources.cpu()
@@ -133,11 +142,13 @@ def main(config):
             torchaudio.save(mixture_save_path, mixture_wave.cpu(), config.sr)
             torchaudio.save(label_save_path, label_wave.cpu(), config.sr)
             print(mixture_save_path)
+            print(label_save_path)
+            return rir_config
             
         # list(map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc)))) # for debug
 
         with ThreadPoolExecutor(cpu_count() // 4) as pool:
-            list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
+            rir_configs = list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
         
         for idx, (metric, mixture) in enumerate(zip(metric_csv.iloc, mixture_csv.iloc)):
             mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
