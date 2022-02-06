@@ -1,6 +1,10 @@
 from argparse import ArgumentError
+from audioop import bias
 import os
 from turtle import forward
+from unicodedata import bidirectional
+
+import torchaudio
 
 from args import get_args
 from multiprocessing import cpu_count
@@ -124,31 +128,58 @@ class MaskGenerator(torch.nn.Module):
 
 
 class Lfilter(torch.nn.Module):
-    def __init__(self, hidden_channel, kernel_size) -> None:
+    def __init__(self, hidden_channel, kernel_size, layer_num=3) -> None:
         super().__init__()
         self.hidden_channel = hidden_channel
         self.kernel_size = kernel_size
+        self.layer_num = layer_num
 
-        self.conv2d_1 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size), bias=False)
-        self.conv2d_2 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 2), dilation=(1,2), bias=False)
-        self.conv2d_3 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 4), dilation=(1,4), bias=False)
-        self.conv2d_4 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 8), dilation=(1,8), bias=False)
+        # self.conv1d = torch.nn.Conv1d(512, self.hidden_channel, 1, bias=False)
+        # self.prelu = torch.nn.PReLU()
+        self.convs = torch.nn.Sequential(
+            torch.nn.Conv1d(512, self.hidden_channel, 3, 2),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(1, self.hidden_channel),
+            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(1, self.hidden_channel),
+            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(1, self.hidden_channel),
+            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(1, self.hidden_channel),
+            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(1, self.hidden_channel)
+        )
+        self.filter = torch.nn.GRU(self.hidden_channel, 512, num_layers=1, batch_first=True, dropout=0.1, bidirectional=True)
+        self.chan = torch.nn.Conv1d(1, 512, 1)
+            # self.conv2d_1 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 2), dilation=(1,2), bias=False)
+            # self.conv2d_2 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 4), dilation=(1,4), bias=False)
+            # self.conv2d_3 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 8), dilation=(1,8), bias=False)
+            # self.conv2d_4 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 16), dilation=(1,16), bias=False)
 
     def pad_for_lfilter(self, signal, filter_length):
         return F.pad(signal, (filter_length - 1, 0))
 
     def forward(self, input: torch.Tensor):
         time = input.shape[-1]
-        input = self.pad_for_lfilter(input, self.kernel_size)
 
-        input = input.flip(-1).unsqueeze(1)
+        # outputslice = self.pad_for_lfilter(output, layer.kernel_size[-1] * layer.dilation[-1])
+        # input = input.flip(-1).unsqueeze(1)
+        out = self.convs(input)
+        out, _ = self.filter(out.transpose(-2,-1))
+        out = out.transpose(-2,-1)
+        out = out[:,:out.shape[1]//2] + out[:,:out.shape[1]//2] # dimension reduction with summation
 
-        out1 = self.conv2d_1(input)[..., :time]
-        out2 = self.conv2d_2(input)[..., :time]
-        out3 = self.conv2d_3(input)[..., :time]
-        out4 = self.conv2d_4(input)[..., :time]
-        out = torch.cat([out1, out2, out3, out4], 1)
-        return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
+
+        out = out.flip(-1)
+        input = self.pad_for_lfilter(input, out.shape[-1])
+        out = F.conv2d(input.unsqueeze(0), out.unsqueeze(1), groups=input.shape[0]).squeeze(0).flip(-1)
+        out = self.chan(out)
+        return out 
+        # return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
 
 
 class DereverbModule(ConvTasNet):
@@ -189,7 +220,7 @@ class DereverbModule(ConvTasNet):
         #     torch.nn.Linear(1024, rir_func_length * 2),
         #     torch.nn.Linear(rir_func_length * 2, rir_func_length),
         # ])
-        self.lfilter = Lfilter(16, rir_func_length)
+        self.lfilter = Lfilter(128, rir_func_length)
 
         self.decoder = torch.nn.ConvTranspose1d(
             in_channels=enc_num_feats,
@@ -232,6 +263,7 @@ class DereverbModule(ConvTasNet):
         #     rirfeats = layer(rirfeats)
         # dereverb_feats = lfilter(feats, rirfeats)
         dereverb_feats = self.lfilter(rirfeats)
+        # dereverb_feats = F.sigmoid(dereverb_feats) * rirfeats
 
         masked = self.decoder(dereverb_feats)  # B*S, 1, L'
         masked = masked.view(batch_size, num_padded_frames) # B, S, L'
@@ -245,10 +277,13 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
     device = get_device()
     losses = []
     scores = []
+    output_scores = []
+    input_scores = []
     rev_losses = []
     MSE = torch.nn.MSELoss()
     mses = []
 
+    num = 0
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             if config.model == '':
@@ -258,7 +293,9 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
                 distance = distance.to(device)
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
-            mix = rev_sep.sum(1)
+            # mix = rev_sep.sum(1)
+            mix = rev_sep[:,0]
+            clean_sep = clean_sep[:,:1]
 
             if config.norm:
                 mix_std = mix.std(-1, keepdim=True)
@@ -268,12 +305,14 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
                 mix_mean = mix_mean
 
             logits = model(mix)
+            
+            mix = mix * mix_std + mix_mean
 
             if config.norm:
                 logits = logits * mix_std + mix_mean
-            rev_loss = criterion(logits.unsqueeze(1), clean_sep.sum(1).unsqueeze(1)).mean()
+            rev_loss = criterion(logits.unsqueeze(1), clean_sep)
 
-            loss = rev_loss
+            loss = rev_loss.mean()
             # loss = rev_loss + sep_loss
 
 
@@ -283,20 +322,37 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                 optimizer.step()
             losses.append(loss.item())
-            rev_losses.append(rev_loss.item())
+            if isinstance(rev_loss.tolist(), float):
+                rev_loss = rev_loss.unsqueeze(0)
+            rev_losses += rev_loss.tolist()
             mse_score = MSE(logits, clean_sep.sum(1))
-            mses.append(mse_score.tolist())
-
+            mses.append(mse_score.item())
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses)}
             progress_bar_dict['mse_score'] = np.mean(mses)
 
             writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
             writer.add_scalar(f'{mode}/mse_score', np.mean(mses), epoch)
-            if mode == 'val':
-                score = - rev_loss.tolist()
-                scores.append(score)
-                progress_bar_dict['score'] = np.mean(scores)
+
+            output_score = - metric(logits.unsqueeze(1), clean_sep).squeeze()
+            input_score = - metric(mix.unsqueeze(1), clean_sep).squeeze()
+            if isinstance(output_score.tolist(), float):
+                output_score = output_score.unsqueeze(0)
+                input_score = input_score.unsqueeze(0)
+            output_scores += output_score.tolist()
+            input_scores += input_score.tolist()
+            scores += (output_score - input_score).tolist()
+            
+            progress_bar_dict['input_SI_SNR'] = np.mean(input_scores)
+            progress_bar_dict['out_SI_SNR'] = np.mean(output_scores)
+            progress_bar_dict['SI_SNRI'] = np.mean(scores)
+
             pbar.set_postfix(progress_bar_dict)
+            if mode == 'val' and (num == 1 or num == 10):
+                torchaudio.save(f'sample/sample{num}_rev.wav', mix[:1].cpu(), 8000)
+                torchaudio.save(f'sample/sample{num}_clean.wav', clean_sep[0].cpu(), 8000)
+                torchaudio.save(f'sample/sample{num}_result.wav', logits[:1].cpu(), 8000)
+            num += 1
+
     if mode == 'train':
         return np.mean(losses)
     else:
@@ -308,7 +364,7 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     gpu_num = torch.cuda.device_count()
-    config.task = 'rir3'
+    config.task = 'rir1'
     config.batch *= max(gpu_num, 1)
     config.model = 'derev'
     name = 'derev_' + (config.model if config.model is not '' else 'baseline')
@@ -337,7 +393,7 @@ def main(config):
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
-        task='rir3',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -346,16 +402,16 @@ def main(config):
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
         config=config,
-        task='rir3',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
     )
-    
+
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
         config=config,
-        task='rir3',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=None,
