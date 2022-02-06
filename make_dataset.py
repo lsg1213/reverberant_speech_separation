@@ -59,7 +59,8 @@ def get_RIR(config):
     distance_limit_between_src_rcv = 0.5 # 0.5 m
 
     room_sz = [random.random() * (w[1] - w[0]) + w[0], random.random() * (d[1] - d[0]) + d[0], random.random() * (h[1] - h[0]) + h[0]]
-    idx = random.randint(0,2)
+    # idx = random.randint(0,2)
+    idx = 0
     room_sz = [[3.,5.,3.],[5.,8.,3.],[8.,11.,3.]][idx]
     T60= [0.3,0.6,0.9][idx]
 
@@ -93,7 +94,7 @@ def main(config):
         print(f'{mode} generation...')
         metric_csv = pd.read_csv(os.path.join(csvpath, f'metrics_{mode}_mix_clean.csv'))
         mixture_csv = pd.read_csv(os.path.join(csvpath, f'mixture_{mode}_mix_clean.csv'))
-        prefix = 'rir3_'
+        prefix = 'rir1_'
         rir_csv_path = os.path.join(csvpath, f'{prefix}mixture_{mode}_mix_clean.csv')
         rir_metric_csv_path = os.path.join(csvpath, f'{prefix}metrics_{mode}_mix_clean.csv')
         rir_csv = mixture_csv.copy()
@@ -110,7 +111,7 @@ def main(config):
             mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
 
-            label_save_path = rir_csv.iloc[idx]['mixture_path'].replace(f'{prefix}mix_clean', f'{prefix}label_clean')
+            label_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}label_clean')
             makedir('/'.join(label_save_path.split('/')[:-1]))
 
             # rir cross correlation operation
@@ -118,8 +119,8 @@ def main(config):
             rir_function = torch.from_numpy(rir_function.squeeze()).cpu()
             clean_rir_function = torch.from_numpy(clean_rir_function.squeeze()).cpu()
             a_coefficient = F.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function, clamp=False)
-            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function, clamp=False)
+            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function, clamp=False) * 4 * np.pi
+            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function, clamp=False) * 4 * np.pi
             
             # rir normalization
             # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0]
@@ -137,7 +138,7 @@ def main(config):
 
         with ThreadPoolExecutor(cpu_count() // 4) as pool:
             list(pool.map(generate, enumerate(zip(metric_csv.iloc, mixture_csv.iloc))))
-
+        
         for idx, (metric, mixture) in enumerate(zip(metric_csv.iloc, mixture_csv.iloc)):
             mixture_save_path = rir_csv.iloc[idx]['mixture_path'].replace('mix_clean', f'{prefix}mix_clean')
             makedir('/'.join(mixture_save_path.split('/')[:-1]))
