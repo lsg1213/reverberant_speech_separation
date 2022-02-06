@@ -76,10 +76,7 @@ class LibriMix(Dataset):
         self.sample_rate = sample_rate
         # Open csv file
         self.df = pd.read_csv(self.csv_path)
-        if 'rir' in task:
-            answer_csv_path = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f][0]
-            self.answer_csv_path = os.path.join(csv_dir, answer_csv_path)
-            self.df_answer = pd.read_csv(self.answer_csv_path)
+
         # Get rid of the utterances too short
         if self.segment is not None:
             max_len = len(self.df)

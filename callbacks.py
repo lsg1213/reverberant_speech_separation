@@ -62,7 +62,7 @@ class EarlyStopping:
         if mode == 'min':
             self.score = inf
         elif mode == 'max':
-            self.score = 0.
+            self.score = - inf
         self.patience = 0
 
     def cmp(self, score):
