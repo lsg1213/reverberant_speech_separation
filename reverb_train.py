@@ -24,19 +24,6 @@ from evals import evaluate
 from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet
 
 
-def minmaxnorm(data):
-    ndim = data.ndim
-    mindata = data.view(data.shape[0],-1).min(-1, keepdim=True)[0]
-    maxdata = data.view(data.shape[0],-1).max(-1, keepdim=True)[0]
-    
-    while not (mindata.ndim == maxdata.ndim == ndim):
-        mindata = mindata.unsqueeze(1)
-        maxdata = maxdata.unsqueeze(1)
-    data = (2 * (data - mindata) / (maxdata - mindata)) - 1.
-    return data
-
-
-
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
@@ -80,6 +67,15 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
             clean_loss = criterion(clean_logits, clean_sep)
+            
+            if torch.isnan(rev_loss).sum() != 0:
+                print('nan is detected')
+                rev_loss = torch.where(torch.isnan(rev_loss) == False, rev_loss, torch.zeros_like(rev_loss))
+
+            if torch.isnan(clean_loss).sum() != 0:
+                print('nan is detected')
+                clean_loss = torch.where(torch.isnan(clean_loss) == False, clean_loss, torch.zeros_like(clean_loss))
+
             loss = rev_loss + clean_loss
 
             if mode == 'train':
@@ -104,8 +100,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 scores.append(score.tolist())
                 input_scores.append(input_score.tolist())
                 output_scores.append(output_score.tolist())
-                progress_bar_dict['input_score'] = np.mean(input_score.tolist())
-                progress_bar_dict['output_score'] = np.mean(output_score.tolist())
+                progress_bar_dict['input_score'] = np.mean(input_scores.tolist())
+                progress_bar_dict['output_score'] = np.mean(output_scores.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
     if mode == 'train':
