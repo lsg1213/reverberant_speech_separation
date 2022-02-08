@@ -126,60 +126,95 @@ class MaskGenerator(torch.nn.Module):
         output = self.mask_activate(output)
         return output.view(batch_size, self.num_sources, self.output_dim, -1)
 
-
 class Lfilter(torch.nn.Module):
-    def __init__(self, hidden_channel, kernel_size, layer_num=3) -> None:
+    def __init__(self, input_channel, hidden_channel, kernel_size) -> None:
         super().__init__()
+        self.input_channel = input_channel
         self.hidden_channel = hidden_channel
         self.kernel_size = kernel_size
-        self.layer_num = layer_num
-
-        # self.conv1d = torch.nn.Conv1d(512, self.hidden_channel, 1, bias=False)
-        # self.prelu = torch.nn.PReLU()
-        self.convs = torch.nn.Sequential(
-            torch.nn.Conv1d(512, self.hidden_channel, 3, 2),
-            torch.nn.PReLU(),
-            torch.nn.GroupNorm(1, self.hidden_channel),
-            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-            torch.nn.PReLU(),
-            torch.nn.GroupNorm(1, self.hidden_channel),
-            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-            torch.nn.PReLU(),
-            torch.nn.GroupNorm(1, self.hidden_channel),
-            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-            torch.nn.PReLU(),
-            torch.nn.GroupNorm(1, self.hidden_channel),
-            torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-            torch.nn.PReLU(),
-            torch.nn.GroupNorm(1, self.hidden_channel)
-        )
-        self.filter = torch.nn.GRU(self.hidden_channel, 512, num_layers=1, batch_first=True, dropout=0.1, bidirectional=True)
-        self.chan = torch.nn.Conv1d(1, 512, 1)
-            # self.conv2d_1 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 2), dilation=(1,2), bias=False)
-            # self.conv2d_2 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 4), dilation=(1,4), bias=False)
-            # self.conv2d_3 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 8), dilation=(1,8), bias=False)
-            # self.conv2d_4 = torch.nn.Conv2d(1, hidden_channel // 4, (1, kernel_size // 16), dilation=(1,16), bias=False)
+        
+        alpha = torch.rand((self.hidden_channel, 1), requires_grad=True)
+        beta = torch.rand((self.hidden_channel, 1), requires_grad=True)
+        self.kernel = []
+        for i in range(self.hidden_channel):
+            kernel = []
+            for j in range(1):
+                kernel.append(alpha[i, j] * torch.arange(0, beta[i, j].item(), beta[i, j].item() / self.kernel_size, dtype=torch.float32, requires_grad=True)[:self.kernel_size])
+            self.kernel.append(torch.stack(kernel, 0))
+        self.kernel = torch.nn.Parameter(torch.stack(self.kernel, 0))
+        self.kernel_weight = torch.nn.Parameter(torch.rand((self.hidden_channel, 1, self.kernel_size), requires_grad=True))
+        self.gru = torch.nn.GRU(self.input_channel, self.input_channel, batch_first=True, dropout=0.1, bidirectional=True)
+        self.prelu = torch.nn.PReLU()
 
     def pad_for_lfilter(self, signal, filter_length):
         return F.pad(signal, (filter_length - 1, 0))
 
     def forward(self, input: torch.Tensor):
-        time = input.shape[-1]
+        batch, feat, time = input.shape
+        input = self.pad_for_lfilter(input, self.kernel_size)
+        pad_time = input.shape[-1]
 
-        # outputslice = self.pad_for_lfilter(output, layer.kernel_size[-1] * layer.dilation[-1])
-        # input = input.flip(-1).unsqueeze(1)
-        out = self.convs(input)
-        out, _ = self.filter(out.transpose(-2,-1))
-        out = out.transpose(-2,-1)
-        out = out[:,:out.shape[1]//2] + out[:,:out.shape[1]//2] # dimension reduction with summation
+        kernel = self.kernel * self.kernel_weight
+        input = input.reshape([-1, pad_time])
+        out = F.conv1d(input.unsqueeze(1).flip(-1), kernel).flip(-1)
+        out = out.sum(1).reshape((batch, feat, time))
+        out = self.prelu(out)
+        out = self.gru(out.transpose(-2, -1))[0].transpose(-2, -1)
+        out = out[:, :out.shape[1] // 2] + out[:, out.shape[1] // 2:]
+        return out
 
 
-        out = out.flip(-1)
-        input = self.pad_for_lfilter(input, out.shape[-1])
-        out = F.conv2d(input.unsqueeze(0), out.unsqueeze(1), groups=input.shape[0]).squeeze(0).flip(-1)
-        out = self.chan(out)
-        return out 
-        # return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
+# class Lfilter(torch.nn.Module):
+#     def __init__(self, input_channel, hidden_channel, kernel_size, layer_num=3) -> None:
+#         super().__init__()
+#         self.hidden_channel = hidden_channel
+#         self.kernel_size = kernel_size
+#         self.layer_num = layer_num
+
+#         self.conv1d = torch.nn.Conv1d(512, self.hidden_channel, 1, bias=False)
+#         self.prelu = torch.nn.PReLU()
+#         # self.convs = torch.nn.Sequential(
+#         #     torch.nn.Conv1d(512, self.hidden_channel, 3, 2),
+#         #     torch.nn.PReLU(),
+#         #     torch.nn.GroupNorm(1, self.hidden_channel),
+#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+#         #     torch.nn.PReLU(),
+#         #     torch.nn.GroupNorm(1, self.hidden_channel),
+#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+#         #     torch.nn.PReLU(),
+#         #     torch.nn.GroupNorm(1, self.hidden_channel),
+#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+#         #     torch.nn.PReLU(),
+#         #     torch.nn.GroupNorm(1, self.hidden_channel),
+#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
+#         #     torch.nn.PReLU(),
+#         #     torch.nn.GroupNorm(1, self.hidden_channel)
+#         # )
+#         self.filter = torch.nn.GRU(self.hidden_channel, 512, num_layers=1, batch_first=True, dropout=0.1, bidirectional=True)
+#         # self.chan = torch.nn.Conv1d(1, 512, 1)
+
+#     def pad_for_lfilter(self, signal, filter_length):
+#         return F.pad(signal, (filter_length - 1, 0))
+
+#     def forward(self, input: torch.Tensor):
+#         time = input.shape[-1]
+
+#         # outputslice = self.pad_for_lfilter(output, layer.kernel_size[-1] * layer.dilation[-1])
+#         # input = input.flip(-1).unsqueeze(1)
+#         # out = self.convs(input)
+#         out = input
+#         out = self.conv1d(out)
+#         out = self.prelu(out)
+#         out, _ = self.filter(out.transpose(-2,-1))
+#         out = out.transpose(-2,-1)
+#         out = out[:,:out.shape[1]//2] + out[:,:out.shape[1]//2] # dimension reduction with summation
+
+
+#         # input = self.pad_for_lfilter(input, out.shape[-1])
+#         # out = F.conv2d(input.unsqueeze(0), out.unsqueeze(1), groups=input.shape[0]).squeeze(0).flip(-1)
+#         # out = self.chan(out)
+#         return out 
+#         # return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
 
 
 class DereverbModule(ConvTasNet):
@@ -220,7 +255,7 @@ class DereverbModule(ConvTasNet):
         #     torch.nn.Linear(1024, rir_func_length * 2),
         #     torch.nn.Linear(rir_func_length * 2, rir_func_length),
         # ])
-        self.lfilter = Lfilter(128, rir_func_length)
+        self.lfilter = Lfilter(enc_num_feats, 64, rir_func_length)
 
         self.decoder = torch.nn.ConvTranspose1d(
             in_channels=enc_num_feats,
@@ -303,14 +338,16 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
                 mix = (mix - mix_mean) / mix_std
                 mix_std = mix_std
                 mix_mean = mix_mean
-
             logits = model(mix)
             
-            mix = mix * mix_std + mix_mean
 
             if config.norm:
+                mix = mix * mix_std + mix_mean
                 logits = logits * mix_std + mix_mean
             rev_loss = criterion(logits.unsqueeze(1), clean_sep)
+            if torch.isnan(rev_loss).sum() != 0:
+                print('nan is detected')
+                rev_loss = torch.where(torch.isnan(rev_loss) == False, rev_loss, torch.zeros_like(rev_loss))
 
             loss = rev_loss.mean()
             # loss = rev_loss + sep_loss
@@ -348,9 +385,9 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
 
             pbar.set_postfix(progress_bar_dict)
             if mode == 'val' and (num == 1 or num == 10):
-                torchaudio.save(f'sample/sample{num}_rev.wav', mix[:1].cpu(), 8000)
-                torchaudio.save(f'sample/sample{num}_clean.wav', clean_sep[0].cpu(), 8000)
-                torchaudio.save(f'sample/sample{num}_result.wav', logits[:1].cpu(), 8000)
+                torchaudio.save(f'sample/{config.name}_sample{num}_rev.wav', mix[:1].cpu(), 8000)
+                torchaudio.save(f'sample/{config.name}_sample{num}_clean.wav', clean_sep[0].cpu(), 8000)
+                torchaudio.save(f'sample/{config.name}_sample{num}_result.wav', logits[:1].cpu(), 8000)
             num += 1
 
     if mode == 'train':
@@ -364,7 +401,6 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     gpu_num = torch.cuda.device_count()
-    config.task = 'rir1'
     config.batch *= max(gpu_num, 1)
     config.model = 'derev'
     name = 'derev_' + (config.model if config.model is not '' else 'baseline')
@@ -398,6 +434,7 @@ def main(config):
         n_src=config.speechnum,
         segment=config.segment,
     )
+    import pdb; pdb.set_trace()
 
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
@@ -428,7 +465,7 @@ def main(config):
     val_loader = DataLoader(
         val_set,
         shuffle=False,
-        batch_size=config.batch * 2,
+        batch_size=config.batch,
         num_workers=gpu_num * (cpu_count() // 4),
     )
 
