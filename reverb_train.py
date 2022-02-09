@@ -22,6 +22,7 @@ from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet
+from asteroid.models import DPRNNTasNet
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -191,6 +192,8 @@ def main(config):
         model = ConvTasNet_v3(reverse='reverse' in config.name)
     elif config.model == 'tas':
         model = TasNet()
+    elif config.model == 'dprnn':
+        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
