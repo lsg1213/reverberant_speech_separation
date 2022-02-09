@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 from torchaudio.models.conv_tasnet import ConvBlock, ConvTasNet
+from asteroid.models import DPRNNTasNet
 
 
 class MaskGenerator(torch.nn.Module):

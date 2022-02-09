@@ -21,8 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet
-from asteroid.models import DPRNNTasNet
+from model import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):

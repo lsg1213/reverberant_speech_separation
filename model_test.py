@@ -46,7 +46,7 @@ class Test:
             distance = torch.from_numpy(distance[None]).to(self.device)
             mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
-            assert results.shape == clean_sep[None].shape
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def test_ConvTasNet_v2(self):
         config = deepcopy(self.config)
@@ -58,20 +58,31 @@ class Test:
             distance = torch.from_numpy(distance[None]).to(self.device)
             mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
-            assert results.shape == clean_sep[None].shape
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
-    
     def test_ConvTasNet_v3(self):
         config = deepcopy(self.config)
         config.task = 'rir'
         config.model = 'v3'
         self.make_testdataset(config)
-        model = ConvTasNet_v3(distance=True).to(self.device)
+        model = ConvTasNet_v3(reverse=True).to(self.device)
         for rev_sep, clean_sep, _, distance in self.testset:
             distance = torch.from_numpy(distance[None]).to(self.device)
             mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix, distance)
-            assert results.shape == clean_sep[None].shape
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
+
+    def test_DPRNN(self):
+        config = deepcopy(self.config)
+        config.task = 'rir'
+        config.model = 'dprnn'
+        self.make_testdataset(config)
+        model = DPRNNTasNet(config.speechnum).to(self.device)
+        for rev_sep, clean_sep, _, distance in self.testset:
+            distance = torch.from_numpy(distance[None]).to(self.device)
+            mix = rev_sep.sum(-1)[None].to(self.device)
+            results = model(mix)
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def run(self) -> None:
         functions = [i for i in dir(self) if 'test_' in i]
