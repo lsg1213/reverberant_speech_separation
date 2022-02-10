@@ -52,7 +52,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             loss_val = loss.item()
             losses.append(loss_val)
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
-            writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
 
             if mode == 'val':
                 input_score = - metric(torch.stack([mix, mix], 1), clean)
@@ -65,6 +64,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 progress_bar_dict['output_score'] = np.mean(output_score.tolist())
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
+    writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:

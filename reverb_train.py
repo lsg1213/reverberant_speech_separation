@@ -88,9 +88,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             clean_losses.append(clean_loss.item())
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses), 'clean_loss': np.mean(clean_losses)}
 
-            writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
-            writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-            writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
             if mode == 'val':
                 mix = rev_sep.sum(1)
                 mixcat = torch.stack([mix, mix], 1)
@@ -100,10 +97,14 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 scores.append(score.tolist())
                 input_scores.append(input_score.tolist())
                 output_scores.append(output_score.tolist())
-                progress_bar_dict['input_score'] = np.mean(input_scores.tolist())
-                progress_bar_dict['output_score'] = np.mean(output_scores.tolist())
+                progress_bar_dict['input_score'] = np.mean(input_scores)
+                progress_bar_dict['output_score'] = np.mean(output_scores)
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
+            
+    writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
+    writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
+    writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
