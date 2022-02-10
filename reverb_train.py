@@ -56,7 +56,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_std = clean_std.unsqueeze(1)
                 clean_mean = clean_mean.unsqueeze(1)
 
-            if config.model == '':
+            if config.model in ('', 'dprnn'):
                 logits = model(mix)
                 clean_logits = model(cleanmix)
             else:
@@ -112,6 +112,22 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
         writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
         writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
         return np.mean(losses), np.mean(scores)
+
+
+def get_model(config):
+    if config.model == '':
+        model = torchaudio.models.ConvTasNet(msk_activate='relu')
+    elif config.model == 'v1':
+        model = ConvTasNet_v1()
+    elif config.model == 'v2':
+        model = ConvTasNet_v2(reverse='reverse' in config.name)
+    elif config.model == 'v3':
+        model = ConvTasNet_v3(reverse='reverse' in config.name)
+    elif config.model == 'tas':
+        model = TasNet()
+    elif config.model == 'dprnn':
+        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    return model
 
 
 def main(config):
@@ -182,18 +198,7 @@ def main(config):
         num_workers=gpu_num * (cpu_count() // 4),
     )
 
-    if config.model == '':
-        model = torchaudio.models.ConvTasNet(msk_activate='relu')
-    elif config.model == 'v1':
-        model = ConvTasNet_v1()
-    elif config.model == 'v2':
-        model = ConvTasNet_v2(reverse='reverse' in config.name)
-    elif config.model == 'v3':
-        model = ConvTasNet_v3(reverse='reverse' in config.name)
-    elif config.model == 'tas':
-        model = TasNet()
-    elif config.model == 'dprnn':
-        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    model = get_model(config)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
@@ -273,7 +278,10 @@ def main(config):
                 callback(results)
         print('---------------------------------------------')
     resume = torch.load(os.path.join(savepath, 'best.pt'))
+    model = get_model(config)
     model.load_state_dict(resume['model'])
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
     model = model.to(device)
     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
     writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
