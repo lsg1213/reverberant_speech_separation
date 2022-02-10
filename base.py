@@ -185,7 +185,7 @@ def main(config):
                     'model': model_state,
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
-                    'epoch': epoch
+                    'epoch' : epoch + 1
                 })
                 for cb in callbacks:
                     if type(cb).__name__ != 'Checkpoint':
