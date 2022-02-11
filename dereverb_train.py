@@ -156,11 +156,10 @@ class Lfilter(torch.nn.Module):
         return F.pad(signal, (filter_length - 1, 0))
             
     def forward(self, input: torch.Tensor):
-        kernel = self.kernel * self.kernel_weight
-
         if 'v2' in self.config.model:
             out = input
         else:
+            kernel = self.kernel * self.kernel_weight
             batch, feat, time = input.shape
             input = self.pad_for_lfilter(input, self.kernel_size)
             pad_time = input.shape[-1]
@@ -539,7 +538,7 @@ def main(config):
     model = DereverbModule(config)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=1, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
