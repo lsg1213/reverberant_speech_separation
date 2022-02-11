@@ -438,9 +438,10 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
             if mode == 'val' and (num == 1 or num == 10):
                 torchaudio.save(f'sample/{config.name}_sample{num}_rev.wav', mix[0,None].cpu(), 8000)
                 torchaudio.save(f'sample/{config.name}_sample{num}_clean_1.wav', clean_sep[0,0,None].cpu(), 8000)
-                torchaudio.save(f'sample/{config.name}_sample{num}_clean_2.wav', clean_sep[0,1,None].cpu(), 8000)
                 torchaudio.save(f'sample/{config.name}_sample{num}_result_1.wav', logits[0,0,None].cpu(), 8000)
-                torchaudio.save(f'sample/{config.name}_sample{num}_result_2.wav', logits[0,1,None].cpu(), 8000)
+                if not config.test:
+                    torchaudio.save(f'sample/{config.name}_sample{num}_clean_2.wav', clean_sep[0,1,None].cpu(), 8000)
+                    torchaudio.save(f'sample/{config.name}_sample{num}_result_2.wav', logits[0,1,None].cpu(), 8000)
             num += 1
 
 
@@ -595,7 +596,7 @@ def main(config):
                     'model': model_state,
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
-                    'epoch': epoch
+                    'epoch': epoch + 1
                 })
                 for cb in callbacks:
                     if type(cb).__name__ != 'Checkpoint':
