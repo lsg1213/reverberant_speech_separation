@@ -8,6 +8,8 @@ import torch
 from glob import glob
 from torch.utils.data import Dataset
 
+from utils import no_distance_models
+
 
 class LibriMix(Dataset):
     """Dataset class for LibriMix source separation tasks.
@@ -124,7 +126,7 @@ class LibriMix(Dataset):
         # Convert to torch tensor
         mixture = torch.from_numpy(mixture)
 
-        if self.config.model == '':
+        if self.config.model in no_distance_models:
             if not self.return_id:
                 return mixture, clean_sep
             # 5400-34479-0005_4973-24515-0007.wav

@@ -23,7 +23,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
 from data_utils import LibriMix
-from utils import makedir, get_device
+from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from torchaudio.models import ConvTasNet
@@ -353,7 +353,7 @@ def iterloop(config, writer, epoch, model: DereverbModule, criterion, dataloader
     num = 0
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
-            if config.model == '':
+            if config.model == no_distance_models:
                 mix, clean = inputs
             else:
                 mix, clean, distance = inputs

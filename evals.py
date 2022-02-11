@@ -5,13 +5,13 @@ from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 from asteroid.dsp.normalization import normalize_estimates
 import torch
 from tqdm import tqdm
-from numpy import float64, mean, ndarray
+from numpy import mean, ndarray
 import soundfile as sf
 
-from utils import get_device, makedir
+from utils import get_device, makedir, no_distance_models
 
 
-def evaluate(config, model, dataset, savepath, epoch):
+def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
     device = get_device()
 
@@ -27,7 +27,7 @@ def evaluate(config, model, dataset, savepath, epoch):
     with torch.no_grad():
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
             for inputs in pbar:
-                if config.model == '':
+                if config.model in no_distance_models:
                     mix, clean, idx = inputs
                 else:
                     mix, clean, idx, distance = inputs
@@ -38,8 +38,12 @@ def evaluate(config, model, dataset, savepath, epoch):
                     distance = distance.to(device)
                 rev_sep = mix[None].to(device).transpose(1,2)
                 clean_sep = clean[None].to(device).transpose(1,2)
-                mix = rev_sep.sum(1)
-                mixcat = torch.stack([mix, mix], 1)
+                if dereverb:
+                    mix = rev_sep[:,0]
+                    mixcat = rev_sep[:,:1]
+                else:
+                    mix = rev_sep.sum(1)
+                    mixcat = torch.stack([mix, mix], 1)
 
                 if config.norm:
                     mix_std = mix.std(-1, keepdim=True)
@@ -48,7 +52,7 @@ def evaluate(config, model, dataset, savepath, epoch):
                     mix_std = mix_std.unsqueeze(1)
                     mix_mean = mix_mean.unsqueeze(1)
 
-                if config.model == '':
+                if config.model in no_distance_models:
                     logits = model(mix)
                 else:
                     logits = model(mix, distance)
