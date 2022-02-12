@@ -5,6 +5,13 @@ from torch.nn.parameter import Parameter
 from torchaudio.models.conv_tasnet import ConvBlock, ConvTasNet
 import torchaudio.models.conv_tasnet as conv_tasnet
 from asteroid.models import DPRNNTasNet
+from torch import nn
+
+from asteroid import torch_utils
+from asteroid import torch_utils
+from asteroid_filterbanks import Encoder, Decoder, FreeFB
+from asteroid.masknn.recurrent import SingleRNN
+from asteroid.masknn.norms import GlobLN
 
 
 class MaskGenerator(torch.nn.Module):
@@ -677,17 +684,6 @@ class ConvTasNet_feedback(ConvTasNet):
         return output
 
 
-import torch
-from torch import nn
-
-from asteroid import torch_utils
-from asteroid import torch_utils
-from asteroid_filterbanks import Encoder, Decoder, FreeFB
-from asteroid.masknn.recurrent import SingleRNN
-from asteroid.engine.optimizers import make_optimizer
-from asteroid.masknn.norms import GlobLN
-
-
 class TasNet(nn.Module):
     """Some kind of TasNet, but not the original one
     Differences:
@@ -931,7 +927,7 @@ class Dereverb_DPRNNTasNet_v1(DPRNNTasNet):
     def __init__(self, config, out_chan=None, bn_chan=128, hid_size=128, chunk_size=100, hop_size=None, n_repeats=6, norm_type="gLN", mask_act="sigmoid", bidirectional=True, rnn_type="LSTM", num_layers=1, dropout=0, in_chan=None, fb_name="free", kernel_size=16, n_filters=64, stride=8, encoder_activation=None, sample_rate=8000, use_mulcat=False, **fb_kwargs):
         super().__init__(config.speechnum, out_chan, bn_chan, hid_size, chunk_size, hop_size, n_repeats, norm_type, mask_act, bidirectional, rnn_type, num_layers, dropout, in_chan, fb_name, kernel_size, n_filters, stride, encoder_activation, sample_rate, use_mulcat, **fb_kwargs)
         self.config = config
-        self.dereverb_module = Dereverb_module(config, input_channel=n_filters, hidden_channel=n_filters, version='v2')
+        self.dereverb_module = Dereverb_module(config, input_channel=n_filters, hidden_channel=n_filters)
         
     def forward(self, wav, distance=None, test=False):
         """Enc/Mask/Dec model forward
@@ -966,4 +962,66 @@ class Dereverb_DPRNNTasNet_v1(DPRNNTasNet):
         reconstructed = torch_utils.pad_x_to_y(decoded, wav)
         reconstructed = _shape_reconstructed(reconstructed, shape)
         return dereverb_reconstructed, reconstructed
+
+
+class Dereverb_TasNet_v1(nn.Module):
+    """Some kind of TasNet, but not the original one
+    Differences:
+        - Overlap-add support (strided convolutions)
+        - No frame-wise normalization on the wavs
+        - GlobLN as bottleneck layer.
+        - No skip connection.
+    Args:
+        fb_conf (dict): see local/conf.yml
+        mask_conf (dict): see local/conf.yml
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.n_src = 2
+        self.n_filters = 512
+        # Create TasNet encoders and decoders (could use nn.Conv1D as well)
+        self.encoder_sig = Encoder(FreeFB(512, 40, 20))
+        self.encoder_relu = Encoder(FreeFB(512, 40, 20))
+        self.decoder = Decoder(FreeFB(512, 40, 20))
+        self.bn_layer = GlobLN(512)
+
+        # Create TasNet masker
+        self.masker = nn.Sequential(
+            SingleRNN(
+                "lstm",
+                512,
+                hidden_size=600,
+                n_layers=4,
+                bidirectional=True,
+                dropout=0.3,
+            ),
+            nn.Linear(2 * 600, self.n_src * self.n_filters),
+            nn.Sigmoid(),
+        )
+        self.dereverb_module = Dereverb_module(config, 512, 512)
+
+    def forward(self, x, test=False):
+        batch_size = x.shape[0]
+        if len(x.shape) == 2:
+            x = x.unsqueeze(1)
+        tf_rep = self.encode(x)
+        to_sep = self.bn_layer(tf_rep)
+        est_masks = self.masker(to_sep.transpose(-1, -2)).transpose(-1, -2)
+        est_masks = est_masks.view(batch_size, self.n_src, self.n_filters, -1)
+        masked_tf_rep = tf_rep.unsqueeze(1) * est_masks
+
+        dereverb_masked_tf_rep = self.dereverb_module(masked_tf_rep.reshape((-1, masked_tf_rep.shape[-2], masked_tf_rep.shape[-1])))
+        dereverb_masked_tf_rep = dereverb_masked_tf_rep.reshape((batch_size, -1, masked_tf_rep.shape[-2], masked_tf_rep.shape[-1]))
+        dereverb_reconstructed = torch_utils.pad_x_to_y(self.decoder(dereverb_masked_tf_rep), x)
+        if not test:
+            reconstructed = torch_utils.pad_x_to_y(self.decoder(masked_tf_rep), x)
+            return dereverb_reconstructed, reconstructed
+        return dereverb_reconstructed
+
+    def encode(self, x):
+        relu_out = torch.relu(self.encoder_relu(x))
+        sig_out = torch.sigmoid(self.encoder_sig(x))
+        return sig_out * relu_out
 

@@ -209,17 +209,23 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
 
 def get_model(config):
+    splited_name = config.model.split('_')
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif 'dprnn' in config.model:
         modelname = 'Dereverb_DPRNNTasNet'
-        if len(config.model.split('_')) > 2:
-            modelname += '_' + config.model.split('_')[-1]
+        if len(splited_name)) > 2:
+            modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)(config, sample_rate=config.sr)
         else:
             model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    elif 'tas' in config.model:
+        modelname = 'Dereverb_TasNet'
+        if len(splited_name) > 2:
+            modelname += '_' + splited_name[-1]
+            model = getattr(models, modelname)(config)
     else:
-        modelname = 'Dereverb_ConvTasNet_' + config.model.split('_')[-1]
+        modelname = 'Dereverb_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
     return model
 

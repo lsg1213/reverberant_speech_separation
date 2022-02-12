@@ -99,6 +99,21 @@ class Test:
             dereverb_results = model(mix, test=True)
             assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
+    def test_Dereverb_TasNet_v1(self):
+        config = deepcopy(self.config)
+        config.task = 'rir'
+        config.model = 'tas_v1'
+        self.make_testdataset(config)
+        model = Dereverb_TasNet_v1(config).to(self.device)
+        for rev_sep, clean_sep, _, distance in self.testset:
+            distance = torch.from_numpy(distance[None]).to(self.device)
+            mix = rev_sep.sum(-1)[None].to(self.device)
+            dereverb_results, results = model(mix)
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
+            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
+
+            dereverb_results = model(mix, test=True)
+            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def run(self) -> None:
         functions = [i for i in dir(self) if 'test_' in i]
