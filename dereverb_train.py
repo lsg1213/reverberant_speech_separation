@@ -138,10 +138,11 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
-
-            loss = rev_loss
+            
             if not config.test:
-                loss += sep_loss
+                loss = rev_loss + sep_loss
+            else:
+                loss = rev_loss
 
             if mode == 'train':
                 optimizer.zero_grad()
