@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
 from data_utils import LibriMix
-from utils import makedir, get_device
+from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from models import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
@@ -34,7 +34,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     clean_losses = []
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
-            if config.model == '':
+            if config.model in no_distance_models:
                 mix, clean = inputs
             else:
                 mix, clean, distance = inputs
@@ -56,7 +56,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_std = clean_std.unsqueeze(1)
                 clean_mean = clean_mean.unsqueeze(1)
 
-            if config.model in ('', 'dprnn'):
+            if config.model in no_distance_models:
                 logits = model(mix)
                 clean_logits = model(cleanmix)
             else:
@@ -67,6 +67,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
             clean_loss = criterion(clean_logits, clean_sep)
+            clean_loss = torch.tensor(0.)
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')

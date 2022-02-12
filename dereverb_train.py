@@ -181,12 +181,14 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
             pbar.set_postfix(progress_bar_dict)
             if mode == 'val' and (num == 1 or num == 10):
-                torchaudio.save(f'sample/{config.name}_sample{num}_rev.wav', mix[0,None].cpu(), 8000)
-                torchaudio.save(f'sample/{config.name}_sample{num}_clean_1.wav', clean_sep[0,0,None].cpu(), 8000)
-                torchaudio.save(f'sample/{config.name}_sample{num}_result_1.wav', logits[0,0,None].cpu(), 8000)
+                sample_dir = f'sample/{config.name}'
+                makedir(sample_dir)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_rev.wav'), mix[0,None].cpu(), 8000)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_clean_1.wav'), clean_sep[0,0,None].cpu(), 8000)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_result_1.wav'), logits[0,0,None].cpu(), 8000)
                 if not config.test:
-                    torchaudio.save(f'sample/{config.name}_sample{num}_clean_2.wav', clean_sep[0,1,None].cpu(), 8000)
-                    torchaudio.save(f'sample/{config.name}_sample{num}_result_2.wav', logits[0,1,None].cpu(), 8000)
+                    torchaudio.save(os.path.join(sample_dir, f'{num}_clean_2.wav'), clean_sep[0,1,None].cpu(), 8000)
+                    torchaudio.save(os.path.join(sample_dir, f'{num}_result_2.wav'), logits[0,1,None].cpu(), 8000)
             num += 1
 
 
