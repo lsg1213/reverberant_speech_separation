@@ -4,6 +4,7 @@ from audioop import bias
 import os
 from turtle import forward
 from unicodedata import bidirectional
+from asteroid import DPRNNTasNet
 
 import torchaudio
 
@@ -28,6 +29,7 @@ from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from torchaudio.models import ConvTasNet
 from models import ConvBlock
+import models
 
 
 
@@ -210,9 +212,11 @@ def get_model(config):
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif 'dprnn' in config.model:
         modelname = 'Dereverb_DPRNNTasNet'
-        if len(config.model.split('_')) != 1:
+        if len(config.model.split('_')) > 2:
             modelname += '_' + config.model.split('_')[-1]
-        model = getattr(model, modelname)(config.speechnum, sample_rate=config.sr)
+            model = getattr(models, modelname)(config, sample_rate=config.sr)
+        else:
+            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
     return model
 
 
@@ -221,12 +225,10 @@ def main(config):
     gpu_num = torch.cuda.device_count()
     config.batch *= max(gpu_num, 1)
 
-    # v1: dereverb_module
-    # v2: gru
-    # v3: dereverb_module+gru
-    if config.model not in ('v1','v2','v3'):
-        raise ValueError('model must be v1, v2, v3')
-    config.model = 'derev_' + config.model
+    # v1: gru
+    if config.model not in ('dprnn_v1'):
+        raise ValueError('model must be dprnn_v1')
+    config.model = 'Dereverb_' + config.model
     name = 'derev_' + (config.model if config.model is not '' else 'baseline')
     name += f'_{config.batch}'
     if config.model != '' and config.task == '':
