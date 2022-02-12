@@ -867,7 +867,7 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
             bias=False,
         )
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, test=False) -> torch.Tensor:
         input = input.unsqueeze(1)
         """Perform source separation. Generate audio source waveforms.
 
@@ -915,9 +915,9 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
 
         if num_pads > 0:
             output = output[..., :-num_pads]
-            if self.config.test:
+            if not test:
                 separated_output = separated_output[..., :-num_pads]
-        if self.config.test:
+        if test:
             return output
         else:
             return output, separated_output
@@ -1025,3 +1025,117 @@ class Dereverb_TasNet_v1(nn.Module):
         sig_out = torch.sigmoid(self.encoder_sig(x))
         return sig_out * relu_out
 
+
+class Dereverb_ConvTasNet_v2(ConvTasNet):
+    def __init__(
+        self,
+        config,
+        num_sources: int = 2,
+        # encoder/decoder parameters
+        enc_kernel_size: int = 16,
+        enc_num_feats: int = 512,
+        # mask generator parameters
+        msk_kernel_size: int = 3,
+        msk_num_feats: int = 128,
+        msk_num_hidden_feats: int = 512,
+        msk_num_layers: int = 8,
+        msk_num_stacks: int = 3,
+        msk_activate: str = "sigmoid",
+    ):
+        super(Dereverb_ConvTasNet_v2, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+        self.config = config
+        self.num_sources = 1 if self.config.test else num_sources
+        self.enc_num_feats = enc_num_feats
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_stride = enc_kernel_size // 2
+
+        self.encoder = torch.nn.Conv1d(
+            in_channels=1,
+            out_channels=enc_num_feats,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+        
+        self.mask_generator = conv_tasnet.MaskGenerator(
+            input_dim=enc_num_feats,
+            num_sources=num_sources,
+            kernel_size=msk_kernel_size,
+            num_feats=msk_num_feats,
+            num_hidden=msk_num_hidden_feats,
+            num_layers=msk_num_layers,
+            num_stacks=msk_num_stacks,
+            msk_activate=msk_activate,
+        )
+
+        # 8000(sampling rate) * 0.5(T60 maximum value) / 8(encoded feature resolution)
+        rir_func_length = np.ceil(8000 * 0.1 / 8).astype(np.int32)
+        self.dereverb_module = Dereverb_module(config, enc_num_feats, 64, rir_func_length)
+
+        self.decoder = torch.nn.ConvTranspose1d(
+            in_channels=enc_num_feats,
+            out_channels=1,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+
+    def forward(self, input: torch.Tensor, test=False) -> torch.Tensor:
+        input = input.unsqueeze(1)
+        """Perform source separation. Generate audio source waveforms.
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
+
+        Returns:
+            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
+        """
+        if input.ndim != 3 or input.shape[1] != 1:
+            raise ValueError(
+                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
+            )
+
+        # B: batch size
+        # L: input frame length
+        # L': padded input frame length
+        # F: feature dimension
+        # M: feature frame length
+        # S: number of sources
+
+        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
+        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
+        feats = self.encoder(padded)  # B, F, M
+
+        # separation module
+        if not self.config.test:
+            masked = self.mask_generator(feats) * feats.unsqueeze(1)  # B, S, F, M
+            separated_feat = masked.view(
+                batch_size * self.num_sources, self.enc_num_feats, -1 # + int(distance is not None)
+            )  # B*S, F, M
+            separated_output = self.decoder(separated_feat)
+            separated_output = separated_output.view(
+                batch_size, self.num_sources, num_padded_frames
+            )
+            feats = separated_feat
+
+        # dereberberation module
+        dereverb_mask = self.dereverb_module(feats)
+        dereverb_feats = dereverb_mask * feats
+
+        masked = self.decoder(dereverb_feats)  # B*S, 1, L'
+        output = masked.view(
+            batch_size, self.num_sources, num_padded_frames
+        )  # B, S, L'
+
+        if num_pads > 0:
+            output = output[..., :-num_pads]
+            if not test:
+                separated_output = separated_output[..., :-num_pads]
+        if test:
+            return output
+        else:
+            return output, separated_output
+
+    
