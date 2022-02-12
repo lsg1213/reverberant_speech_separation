@@ -203,6 +203,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     if mode == 'train':
         return np.mean(losses)
     else:
+        writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
+        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
         writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
         writer.add_scalar(f'{mode}/MSE', np.mean(mses), epoch)
         return np.mean(losses), np.mean(scores)
