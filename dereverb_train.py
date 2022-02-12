@@ -214,7 +214,7 @@ def get_model(config):
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
     elif 'dprnn' in config.model:
         modelname = 'Dereverb_DPRNNTasNet'
-        if len(splited_name)) > 2:
+        if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)(config, sample_rate=config.sr)
         else:
@@ -236,8 +236,6 @@ def main(config):
     config.batch *= max(gpu_num, 1)
 
     # v1: gru
-    if config.model not in ('v1', 'v2', 'v3', 'dprnn_v1'):
-        raise ValueError('model must be dprnn_v1')
     config.model = 'Dereverb_' + config.model
     name = 'derev_' + (config.model if config.model is not '' else 'baseline')
     name += f'_{config.batch}'
