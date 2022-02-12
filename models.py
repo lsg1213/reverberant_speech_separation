@@ -770,13 +770,13 @@ def _unsqueeze_to_3d(x):
 
 
 class Dereverb_module(torch.nn.Module):
-    def __init__(self, config, input_channel, hidden_channel, kernel_size=None, version='v1') -> None:
+    def __init__(self, config, input_channel, hidden_channel, kernel_size=None) -> None:
         super().__init__()
         self.input_channel = input_channel
         self.hidden_channel = hidden_channel
         self.kernel_size = kernel_size
         self.config = config
-        self.version = version
+        self.version = 'v2'
 
         if 'v2' not in self.version:
             alpha = torch.rand((self.hidden_channel, 1), requires_grad=True)
@@ -849,7 +849,6 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
         
         self.mask_generator = conv_tasnet.MaskGenerator(
             input_dim=enc_num_feats,
-            output_dim = enc_num_feats,
             num_sources=num_sources,
             kernel_size=msk_kernel_size,
             num_feats=msk_num_feats,
@@ -904,8 +903,8 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
             separated_feat = masked.view(
                 batch_size * self.num_sources, self.enc_num_feats, -1 # + int(distance is not None)
             )  # B*S, F, M
-            separated_feat = self.decoder(separated_feat)
-            separated_feat = separated_feat.view(
+            separated_output = self.decoder(separated_feat)
+            separated_output = separated_output.view(
                 batch_size, self.num_sources, num_padded_frames
             )
             feats = separated_feat
@@ -921,11 +920,11 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
         if num_pads > 0:
             output = output[..., :-num_pads]
             if self.config.test:
-                separated_feat = separated_feat[..., :-num_pads]
+                separated_output = separated_output[..., :-num_pads]
         if self.config.test:
             return output
         else:
-            return output, separated_feat
+            return output, separated_output
 
 
 class Dereverb_DPRNNTasNet_v1(DPRNNTasNet):

@@ -218,6 +218,9 @@ def get_model(config):
             model = getattr(models, modelname)(config, sample_rate=config.sr)
         else:
             model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    else:
+        modelname = 'Dereverb_ConvTasNet_' + config.model.split('_')[-1]
+        model = getattr(models, modelname)(config)
     return model
 
 
@@ -227,7 +230,7 @@ def main(config):
     config.batch *= max(gpu_num, 1)
 
     # v1: gru
-    if config.model not in ('dprnn_v1'):
+    if config.model not in ('v1', 'v2', 'v3', 'dprnn_v1'):
         raise ValueError('model must be dprnn_v1')
     config.model = 'Dereverb_' + config.model
     name = 'derev_' + (config.model if config.model is not '' else 'baseline')
