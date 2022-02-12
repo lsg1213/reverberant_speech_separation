@@ -1,7 +1,7 @@
 import torch
 import torchaudio
 
-from model import ConvTasNet_v1
+from models import ConvTasNet_v1
 from args import get_args
 from evals import evaluate
 from utils import get_device
@@ -28,7 +28,7 @@ class Test:
         self.testset = LibriMix(
             csv_dir=os.path.join(self.config.datapath, 'Libri2Mix/wav8k/min/test'),
             config=self.config,
-            task='sep_clean',
+            task='rir_sep_clean',
             sample_rate=self.config.sr,
             n_src=self.config.speechnum,
             segment=None,
@@ -50,6 +50,7 @@ class Test:
             getattr(self, func)()
             print(time() - st, 'seconds to test')
         print(f'All test time is {time() - test_st}')
+
 
 if __name__ == '__main__':
     config = get_args()
