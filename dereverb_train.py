@@ -375,22 +375,22 @@ def main(config):
             if type(callback).__name__ == 'EarlyStopping':
                 tag = callback(results)
                 if tag == False:
-                    # resume = torch.load(os.path.join(savepath, 'best.pt'))
-                    # model.load_state_dict(resume['model'])
-                    # model = model.to(device)
-                    # si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
-                    # writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
-                    # writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
+                    resume = torch.load(os.path.join(savepath, 'best.pt'))
+                    model.load_state_dict(resume['model'])
+                    model = model.to(device)
+                    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+                    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+                    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
                     return
             else:
                 callback(results)
         print('---------------------------------------------')
-    # resume = torch.load(os.path.join(savepath, 'best.pt'))
-    # model.load_state_dict(resume['model'])
-    # model = model.to(device)
-    # si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
-    # writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
-    # writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
+    resume = torch.load(os.path.join(savepath, 'best.pt'))
+    model.load_state_dict(resume['model'])
+    model = model.to(device)
+    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
     
 
 if __name__ == '__main__':
