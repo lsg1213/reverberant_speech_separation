@@ -27,10 +27,15 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
     with torch.no_grad():
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
             for inputs in pbar:
+                t60 = None
                 if config.model in no_distance_models:
                     mix, clean, idx = inputs
                 else:
-                    mix, clean, idx, distance, t60 = inputs
+                    if len(inputs) == 4:
+                        mix, clean, idx, distance = inputs
+                    elif len(inputs) == 5:
+                        mix, clean, idx, distance, t60 = inputs
+                        t60 = t60[None].to(device)
                     if not isinstance(distance, torch.Tensor):
                         if not isinstance(distance, ndarray):
                             distance = distance[None]
@@ -55,7 +60,7 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                 if config.model in no_distance_models:
                     logits = model(mix, test=True)
                 else:
-                    logits = model(mix, distance=distance, test=True)
+                    logits = model(mix, distance=distance, t60=t60, test=True)
 
                 if config.norm:
                     logits = logits * mix_std + mix_mean

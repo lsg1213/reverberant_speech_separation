@@ -867,7 +867,7 @@ class Dereverb_ConvTasNet_v1(ConvTasNet):
             bias=False,
         )
 
-    def forward(self, input: torch.Tensor, test=False) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, test=False, **kwargs) -> torch.Tensor:
         input = input.unsqueeze(1)
         """Perform source separation. Generate audio source waveforms.
 
