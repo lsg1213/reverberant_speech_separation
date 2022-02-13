@@ -1339,7 +1339,7 @@ class T60_ConvTasNet_v2(ConvTasNet):
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
         feats = self.encoder(padded)  # B, F, M
 
-        t60 = t60[None,None].repeat((1,1,feats.shape[-1]))
+        t60 = t60.unsqueeze(-1).unsqueeze(-1).repeat((1,1,feats.shape[-1]))
         feats = torch.cat([feats, t60], 1)
         feats = self.gru(feats.transpose(-2,-1))[0].transpose(-2,-1)
         feats = feats[:,:feats.shape[1]//2] + feats[:,feats.shape[1]//2:]
