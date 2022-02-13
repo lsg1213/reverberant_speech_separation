@@ -53,9 +53,9 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                     mix_mean = mix_mean.unsqueeze(1)
 
                 if config.model in no_distance_models:
-                    logits = model(mix)
+                    logits = model(mix, test=True)
                 else:
-                    logits = model(mix, distance)
+                    logits = model(mix, distance, test=True)
 
                 if config.norm:
                     logits = logits * mix_std + mix_mean
