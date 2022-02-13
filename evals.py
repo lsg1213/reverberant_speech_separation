@@ -30,7 +30,7 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                 if config.model in no_distance_models:
                     mix, clean, idx = inputs
                 else:
-                    mix, clean, idx, distance = inputs
+                    mix, clean, idx, distance, t60 = inputs
                     if not isinstance(distance, torch.Tensor):
                         if not isinstance(distance, ndarray):
                             distance = distance[None]
@@ -55,7 +55,7 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                 if config.model in no_distance_models:
                     logits = model(mix, test=True)
                 else:
-                    logits = model(mix, distance, test=True)
+                    logits = model(mix, distance=distance, test=True)
 
                 if config.norm:
                     logits = logits * mix_std + mix_mean

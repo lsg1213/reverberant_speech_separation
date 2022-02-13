@@ -126,15 +126,14 @@ class LibriMix(Dataset):
         # Convert to torch tensor
         mixture = torch.from_numpy(mixture)
 
-        if self.config.model in no_distance_models:
-            if not self.return_id:
-                return mixture, clean_sep
-            # 5400-34479-0005_4973-24515-0007.wav
+        outputs = (mixture, clean_sep)
+        if self.return_id:
             id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-            return mixture, clean_sep, [id1, id2]
-        else:
-            if not self.return_id:
-                return mixture, clean_sep, self.dis_csv.iloc[idx]['distance']
-            # 5400-34479-0005_4973-24515-0007.wav
-            id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
-            return mixture, clean_sep, [id1, id2], self.dis_csv.iloc[idx]['distance']
+            outputs = outputs + ([id1, id2],)
+        if self.config.model not in no_distance_models:
+            outputs = outputs + (self.dis_csv.iloc[idx]['distance'],)
+        if vars(self.config).get('t60') is not None:
+            outputs = outputs + (torch.tensor(self.df.iloc[idx]['T60']).type(mixture.dtype),)
+        return outputs
+        
+        

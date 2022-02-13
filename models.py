@@ -1002,7 +1002,7 @@ class Dereverb_TasNet_v1(nn.Module):
         )
         self.dereverb_module = Dereverb_module(config, 512, 512)
 
-    def forward(self, x, test=False):
+    def forward(self, x, test=False, **kwargs):
         batch_size = x.shape[0]
         if len(x.shape) == 2:
             x = x.unsqueeze(1)
@@ -1026,7 +1026,138 @@ class Dereverb_TasNet_v1(nn.Module):
         return sig_out * relu_out
 
 
-class Dereverb_ConvTasNet_v2(ConvTasNet):
+class Dereverb_T60_module(torch.nn.Module):
+    def __init__(self, config, input_channel, hidden_channel, kernel_size=None) -> None:
+        super().__init__()
+        self.input_channel = input_channel
+        self.hidden_channel = hidden_channel
+        self.kernel_size = kernel_size
+        self.config = config
+        self.version = 'v2'
+
+        if 'v2' not in self.version:
+            alpha = torch.rand((self.hidden_channel, 1), requires_grad=True)
+            beta = torch.rand((self.hidden_channel, 1), requires_grad=True)
+            self.kernel = []
+            for i in range(self.hidden_channel):
+                kernel = []
+                for j in range(1):
+                    kernel.append(alpha[i, j] * torch.arange(0, beta[i, j].item(), beta[i, j].item() / self.kernel_size, dtype=torch.float32, requires_grad=True)[:self.kernel_size])
+                self.kernel.append(torch.stack(kernel, 0))
+            self.kernel = torch.nn.Parameter(torch.stack(self.kernel, 0))
+            self.kernel_weight = torch.nn.Parameter(torch.rand((self.hidden_channel, 1, self.kernel_size), requires_grad=True))
+            self.prelu = torch.nn.PReLU()
+
+        if 'v1' not in self.version:
+            self.gru = torch.nn.GRU(self.input_channel, self.input_channel, batch_first=True, bidirectional=True)
+        
+    def pad_for_dereverb_module(self, signal, filter_length):
+        return F.pad(signal, (filter_length - 1, 0))
+            
+    def forward(self, input: torch.Tensor):
+        if 'v2' in self.version:
+            out = input
+        else:
+            kernel = self.kernel * self.kernel_weight
+            batch, feat, time = input.shape
+            input = self.pad_for_dereverb_module(input, self.kernel_size)
+            pad_time = input.shape[-1]
+            input = input.reshape([-1, pad_time])
+            out = F.conv1d(input.unsqueeze(1).flip(-1), kernel).flip(-1)
+            out = out.sum(1).reshape((batch, feat, time))
+            out = self.prelu(out)
+        if 'v1' not in self.version:
+            out = self.gru(out.transpose(-2, -1))[0].transpose(-2, -1)
+            out = out[:, :out.shape[1] // 2] + out[:, out.shape[1] // 2:]
+        return out
+
+
+class T60_MaskGenerator(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        num_sources: int,
+        kernel_size: int,
+        num_feats: int,
+        num_hidden: int,
+        num_layers: int,
+        num_stacks: int,
+        msk_activate: str,
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.num_sources = num_sources
+
+        self.input_norm = torch.nn.GroupNorm(
+            num_groups=1, num_channels=output_dim, eps=1e-8
+        )
+        self.input_conv = torch.nn.Conv1d(
+            in_channels=input_dim, out_channels=num_feats, kernel_size=1
+        )
+
+        self.receptive_field = 0
+        self.conv_layers = torch.nn.ModuleList([])
+        for s in range(num_stacks):
+            for l in range(num_layers):
+                multi = 2 ** l
+                self.conv_layers.append(
+                    ConvBlock(
+                        io_channels=num_feats,
+                        hidden_channels=num_hidden,
+                        kernel_size=kernel_size,
+                        dilation=multi,
+                        padding=multi,
+                        # The last ConvBlock does not need residual
+                        no_residual=(l == (num_layers - 1) and s == (num_stacks - 1)),
+                    )
+                )
+                self.receptive_field += (
+                    kernel_size if s == 0 and l == 0 else (kernel_size - 1) * multi
+                )
+        self.output_prelu = torch.nn.PReLU()
+        self.output_conv = torch.nn.Conv1d(
+            in_channels=num_feats, out_channels=output_dim * num_sources, kernel_size=1,
+        )
+        if msk_activate == "sigmoid":
+            self.mask_activate = torch.nn.Sigmoid()
+        elif msk_activate == "relu":
+            self.mask_activate = torch.nn.ReLU()
+        else:
+            raise ValueError(f"Unsupported activation {msk_activate}")
+
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Generate separation mask.
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape [batch, features, frames]
+
+        Returns:
+            Tensor: shape [batch, num_sources, features, frames]
+        """
+        t60 = kwargs.get('t60')
+
+        batch_size = input.shape[0]
+        feats = self.input_norm(input)
+        if t60 is not None:
+            t60 = t60.unsqueeze(-1).unsqueeze(-1).repeat(1,1,feats.shape[-1])
+            feats = torch.cat([feats, t60], 1)
+        feats = self.input_conv(feats)
+        output = 0.0
+        for layer in self.conv_layers:
+            residual, skip = layer(feats)
+            if residual is not None:  # the last conv layer does not produce residual
+                feats = feats + residual
+            output = output + skip
+        output = self.output_prelu(output)
+        output = self.output_conv(output)
+        output = self.mask_activate(output)
+        return output.view(batch_size, self.num_sources, self.output_dim, -1)
+
+
+class T60_ConvTasNet_v1(ConvTasNet):
     def __init__(
         self,
         config,
@@ -1042,7 +1173,7 @@ class Dereverb_ConvTasNet_v2(ConvTasNet):
         msk_num_stacks: int = 3,
         msk_activate: str = "sigmoid",
     ):
-        super(Dereverb_ConvTasNet_v2, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+        super(T60_ConvTasNet_v1, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
         self.config = config
         self.num_sources = 1 if self.config.test else num_sources
         self.enc_num_feats = enc_num_feats
@@ -1058,8 +1189,9 @@ class Dereverb_ConvTasNet_v2(ConvTasNet):
             bias=False,
         )
         
-        self.mask_generator = conv_tasnet.MaskGenerator(
-            input_dim=enc_num_feats,
+        self.mask_generator = T60_MaskGenerator(
+            input_dim=enc_num_feats + 1,
+            output_dim=enc_num_feats,
             num_sources=num_sources,
             kernel_size=msk_kernel_size,
             num_feats=msk_num_feats,
@@ -1070,8 +1202,8 @@ class Dereverb_ConvTasNet_v2(ConvTasNet):
         )
 
         # 8000(sampling rate) * 0.5(T60 maximum value) / 8(encoded feature resolution)
-        rir_func_length = np.ceil(8000 * 0.1 / 8).astype(np.int32)
-        self.dereverb_module = Dereverb_module(config, enc_num_feats, 64, rir_func_length)
+        # rir_func_length = np.ceil(8000 * 0.1 / 8).astype(np.int32)
+        # self.dereverb_module = Dereverb_T60_module(config, enc_num_feats, 64, rir_func_length)
 
         self.decoder = torch.nn.ConvTranspose1d(
             in_channels=enc_num_feats,
@@ -1082,7 +1214,7 @@ class Dereverb_ConvTasNet_v2(ConvTasNet):
             bias=False,
         )
 
-    def forward(self, input: torch.Tensor, test=False) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, test=False, **kwargs) -> torch.Tensor:
         input = input.unsqueeze(1)
         """Perform source separation. Generate audio source waveforms.
 
@@ -1104,38 +1236,24 @@ class Dereverb_ConvTasNet_v2(ConvTasNet):
         # M: feature frame length
         # S: number of sources
 
+        t60 = kwargs.get('t60')
+
         padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
         feats = self.encoder(padded)  # B, F, M
 
         # separation module
-        if not self.config.test:
-            masked = self.mask_generator(feats) * feats.unsqueeze(1)  # B, S, F, M
-            separated_feat = masked.view(
-                batch_size * self.num_sources, self.enc_num_feats, -1 # + int(distance is not None)
-            )  # B*S, F, M
-            separated_output = self.decoder(separated_feat)
-            separated_output = separated_output.view(
-                batch_size, self.num_sources, num_padded_frames
-            )
-            feats = separated_feat
-
-        # dereberberation module
-        dereverb_mask = self.dereverb_module(feats)
-        dereverb_feats = dereverb_mask * feats
-
-        masked = self.decoder(dereverb_feats)  # B*S, 1, L'
-        output = masked.view(
+        masked = self.mask_generator(feats, t60=t60) * feats.unsqueeze(1)  # B, S, F, M
+        masked = masked.view(
+            batch_size * self.num_sources, self.enc_num_feats, -1
+        )  # B*S, F, M
+        output = self.decoder(masked)
+        output = output.view(
             batch_size, self.num_sources, num_padded_frames
         )  # B, S, L'
 
         if num_pads > 0:
             output = output[..., :-num_pads]
-            if not test:
-                separated_output = separated_output[..., :-num_pads]
-        if test:
-            return output
-        else:
-            return output, separated_output
+        return output
 
     

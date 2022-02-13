@@ -1,17 +1,23 @@
 from argparse import ArgumentError
+import argparse
+from audioop import bias
 import os
+from turtle import forward
+from unicodedata import bidirectional
+from asteroid import DPRNNTasNet
 
-from torch.nn.modules.loss import MSELoss
+import torchaudio
 
 from args import get_args
 from multiprocessing import cpu_count
 import json
 
 import torch
-import torchaudio
+from torch.nn.modules.loss import MSELoss
+import torch.nn.functional as F
 import numpy as np
 from tensorboardX import SummaryWriter
-from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
+from asteroid.losses import pairwise_neg_sisdr, PITLossWrapper
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -21,24 +27,31 @@ from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from models import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
+from torchaudio.models import ConvTasNet
+from models import ConvBlock
+import models
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
     scores = []
-    input_scores = []
     output_scores = []
+    input_scores = []
     rev_losses = []
     clean_losses = []
+    MSE = torch.nn.MSELoss()
+    mses = []
+
+    num = 0
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
-            if config.model in no_distance_models:
+            if config.model == no_distance_models:
                 mix, clean = inputs
             else:
-                mix, clean, distance, _ = inputs
+                mix, clean, distance, t60 = inputs
                 distance = distance.to(device)
+                t60 = t60.to(device)
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
             mix = rev_sep.sum(1)
@@ -55,23 +68,20 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 mix_mean = mix_mean.unsqueeze(1)
                 clean_std = clean_std.unsqueeze(1)
                 clean_mean = clean_mean.unsqueeze(1)
-
-            if config.model in no_distance_models:
-                logits = model(mix)
-                clean_logits = model(cleanmix)
-            else:
-                logits = model(mix, distance)
-                clean_logits = model(cleanmix, torch.zeros_like(distance))
+            logits = model(mix, t60=t60)
+            clean_logits = model(cleanmix, t60=t60)
+            
             if config.norm:
+                mix = mix * mix_std.squeeze(-1) + mix_mean.squeeze(-1)
                 logits = logits * mix_std + mix_mean
                 clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
             clean_loss = criterion(clean_logits, clean_sep)
-            
+
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
-
+            
             loss = rev_loss + clean_loss
 
             if mode == 'train':
@@ -80,55 +90,94 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                 optimizer.step()
             losses.append(loss.item())
-            rev_losses.append(rev_loss.item())
-            clean_losses.append(clean_loss.item())
-            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses), 'clean_loss': np.mean(clean_losses)}
+            if isinstance(rev_loss.tolist(), float):
+                rev_loss = rev_loss.unsqueeze(0)
+            if not config.test and isinstance(clean_loss.tolist(), float):
+                clean_loss = clean_loss.unsqueeze(0)
+            rev_losses += rev_loss.tolist()
+            clean_losses += clean_loss.tolist()
+            mse_score = MSE(logits, clean_sep)
+            mses.append(mse_score.item())
 
-            if mode == 'val':
-                mix = rev_sep.sum(1)
+            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses)}
+            if not config.test:
+                progress_bar_dict['clean_loss'] = np.mean(clean_losses)
+            progress_bar_dict['mse_score'] = np.mean(mses)
+
+            output_score = - metric(logits, clean_sep).squeeze()
+            if config.test:
+                mixcat = mix.unsqueeze(1)
+            else:
                 mixcat = torch.stack([mix, mix], 1)
-                input_score = - metric(mixcat, clean_sep)
-                output_score = - metric(logits, clean_sep)
-                score = output_score - input_score
-                scores.append(score.tolist())
-                input_scores.append(input_score.tolist())
-                output_scores.append(output_score.tolist())
-                progress_bar_dict['input_score'] = np.mean(input_scores)
-                progress_bar_dict['output_score'] = np.mean(output_scores)
-                progress_bar_dict['score'] = np.mean(scores)
-            pbar.set_postfix(progress_bar_dict)
+            input_score = - metric(mixcat, clean_sep).squeeze()
+            if isinstance(output_score.tolist(), float):
+                output_score = output_score.unsqueeze(0)
+                input_score = input_score.unsqueeze(0)
+            output_scores += output_score.tolist()
+            input_scores += input_score.tolist()
+            scores += (output_score - input_score).tolist()
             
+            progress_bar_dict['input_SI_SNR'] = np.mean(input_scores)
+            progress_bar_dict['out_SI_SNR'] = np.mean(output_scores)
+            progress_bar_dict['SI_SNRI'] = np.mean(scores)
+
+            pbar.set_postfix(progress_bar_dict)
+            if mode == 'val' and (num == 1 or num == 10):
+                sample_dir = f'sample/{config.name}'
+                makedir(sample_dir)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_rev.wav'), mix[0,None].cpu(), 8000)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_clean_1.wav'), clean_sep[0,0,None].cpu(), 8000)
+                torchaudio.save(os.path.join(sample_dir, f'{num}_result_1.wav'), logits[0,0,None].cpu(), 8000)
+                if not config.test:
+                    torchaudio.save(os.path.join(sample_dir, f'{num}_clean_2.wav'), clean_sep[0,1,None].cpu(), 8000)
+                    torchaudio.save(os.path.join(sample_dir, f'{num}_result_2.wav'), logits[0,1,None].cpu(), 8000)
+            num += 1
+
+
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
     writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
+    if not config.test:
+        writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
+    writer.add_scalar(f'{mode}/mse_score', np.mean(mses), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
-        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
-        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
         writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
+        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
+        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
         return np.mean(losses), np.mean(scores)
 
 
 def get_model(config):
+    splited_name = config.model.split('_')
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
-    elif config.model == 'v1':
-        model = ConvTasNet_v1()
-    elif config.model == 'v2':
-        model = ConvTasNet_v2(reverse='reverse' in config.name)
-    elif config.model == 'v3':
-        model = ConvTasNet_v3(reverse='reverse' in config.name)
-    elif config.model == 'tas':
-        model = TasNet()
-    elif config.model == 'dprnn':
-        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    elif 'dprnn' in config.model:
+        modelname = 'T60_DPRNNTasNet'
+        if len(splited_name) > 2:
+            modelname += '_' + splited_name[-1]
+            model = getattr(models, modelname)(config, sample_rate=config.sr)
+        else:
+            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+    elif 'tas' in config.model:
+        modelname = 'T60_TasNet'
+        if len(splited_name) > 2:
+            modelname += '_' + splited_name[-1]
+            model = getattr(models, modelname)(config)
+    else:
+        modelname = 'T60_ConvTasNet_' + splited_name[-1]
+        model = getattr(models, modelname)(config)
     return model
 
 
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
-    name = 'reverb_' + (config.model if config.model is not '' else 'baseline')
+    gpu_num = torch.cuda.device_count()
+    config.batch *= max(gpu_num, 1)
+
+    # v1: gru
+    config.model = 'T60_' + config.model
+    name = 't60_' + (config.model if config.model is not '' else 'baseline')
     name += f'_{config.batch}'
     if config.model != '' and config.task == '':
         raise ArgumentError('clean separation model should be baseline model')
@@ -140,6 +189,8 @@ def main(config):
         config.task += '_'
     if config.norm:
         name += '_norm'
+    if config.test:
+        name += '_test'
     config.name = name + '_' + config.name if config.name is not '' else ''
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
@@ -151,11 +202,10 @@ def main(config):
     init_epoch = 0
     final_epoch = 0
     
-    gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -164,16 +214,16 @@ def main(config):
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
     )
-    
+
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=None,
@@ -190,14 +240,14 @@ def main(config):
     val_loader = DataLoader(
         val_set,
         shuffle=False,
-        batch_size=config.batch * 2,
+        batch_size=config.batch,
         num_workers=gpu_num * (cpu_count() // 4),
     )
 
     model = get_model(config)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=1, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
@@ -205,12 +255,12 @@ def main(config):
     callbacks = []
     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
-    metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
+    metric = PITLossWrapper(pairwise_neg_sisdr)
     def mseloss():
         def _mseloss(logit, answer):
             return MSELoss(reduction='none')(logit, answer)
         return _mseloss
-    criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
+    criterion = PITLossWrapper(pairwise_neg_sisdr)
     if 'mse' in config.name:
         criterion = MSELoss()
     
@@ -276,8 +326,6 @@ def main(config):
     resume = torch.load(os.path.join(savepath, 'best.pt'))
     model = get_model(config)
     model.load_state_dict(resume['model'])
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
     model = model.to(device)
     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
     writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
@@ -285,4 +333,7 @@ def main(config):
     
 
 if __name__ == '__main__':
-    main(get_args())
+    args = argparse.ArgumentParser()
+    args.add_argument('--test', action='store_true')
+    args.add_argument('--t60', type=bool, default=True)
+    main(get_args(args))

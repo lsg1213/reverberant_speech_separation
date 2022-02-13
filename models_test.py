@@ -132,21 +132,20 @@ class Test:
             dereverb_results = model(mix, test=True)
             assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
-    def test_Dereverb_ConvTasNet_v2(self):
+    def test_T60_ConvTasNet_v1(self):
         config = deepcopy(self.config)
         config.task = 'rir'
         config.model = 'v2'
         config.test = False
+        config.t60 = True
         self.make_testdataset(config)
-        model = Dereverb_ConvTasNet_v2(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
+        model = T60_ConvTasNet_v1(config).to(self.device)
+        for rev_sep, clean_sep, _, distance, t60 in self.testset:
             distance = torch.from_numpy(distance[None]).to(self.device)
+            t60 = t60[None].to(self.device)
             mix = rev_sep.sum(-1)[None].to(self.device)
-            dereverb_results, results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
-            dereverb_results = model(mix, test=True)
+            dereverb_results = model(mix, t60=t60)
             assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def run(self) -> None:
