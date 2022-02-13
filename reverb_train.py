@@ -67,7 +67,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
             clean_loss = criterion(clean_logits, clean_sep)
-            clean_loss = torch.tensor(0.)
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
