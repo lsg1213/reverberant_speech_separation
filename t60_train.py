@@ -69,14 +69,15 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_std = clean_std.unsqueeze(1)
                 clean_mean = clean_mean.unsqueeze(1)
             logits = model(mix, t60=t60)
-            clean_logits = model(cleanmix, t60=t60)
+            # clean_logits = model(cleanmix, t60=t60)
             
             if config.norm:
                 mix = mix * mix_std.squeeze(-1) + mix_mean.squeeze(-1)
                 logits = logits * mix_std + mix_mean
-                clean_logits = clean_logits * clean_std + clean_mean
+                # clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
-            clean_loss = criterion(clean_logits, clean_sep)
+            # clean_loss = criterion(clean_logits, clean_sep)
+            clean_loss = torch.zeros_like(rev_loss)
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')

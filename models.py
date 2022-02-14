@@ -1290,7 +1290,8 @@ class T60_ConvTasNet_v2(ConvTasNet):
             bias=False,
         )
         
-        self.gru = torch.nn.GRU(512 + 1, 512, batch_first=True, bidirectional=True)
+        self.gru = torch.nn.GRU(512 + 1, 128, batch_first=True, bidirectional=True)
+        self.conv = torch.nn.Conv1d(128, 512, kernel_size=1, bias=False)
         self.mask_generator = conv_tasnet.MaskGenerator(
             input_dim=enc_num_feats,
             num_sources=num_sources,
@@ -1343,7 +1344,7 @@ class T60_ConvTasNet_v2(ConvTasNet):
         feats = torch.cat([feats, t60], 1)
         feats = self.gru(feats.transpose(-2,-1))[0].transpose(-2,-1)
         feats = feats[:,:feats.shape[1]//2] + feats[:,feats.shape[1]//2:]
-
+        feats = self.conv(feats)
         # separation module
         masked = self.mask_generator(feats) * feats.unsqueeze(1)  # B, S, F, M
         masked = masked.view(
@@ -1359,3 +1360,102 @@ class T60_ConvTasNet_v2(ConvTasNet):
         return output
 
     
+class Dereverb_test_v1(ConvTasNet):
+    def __init__(
+        self,
+        config,
+        num_sources: int = 2,
+        # encoder/decoder parameters
+        enc_kernel_size: int = 16,
+        enc_num_feats: int = 512,
+        # mask generator parameters
+        msk_kernel_size: int = 3,
+        msk_num_feats: int = 128,
+        msk_num_hidden_feats: int = 512,
+        msk_num_layers: int = 8,
+        msk_num_stacks: int = 3,
+        msk_activate: str = "sigmoid",
+    ):
+        super(Dereverb_test_v1, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+        self.config = config
+        self.num_sources = 1 if self.config.test else num_sources
+        self.enc_num_feats = enc_num_feats
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_stride = enc_kernel_size // 2
+
+        self.encoder = torch.nn.Conv1d(
+            in_channels=1,
+            out_channels=enc_num_feats,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+
+        self.auto_gru_encoder = torch.nn.ModuleList([
+            torch.nn.GRU(512, 256, bidirectional=True, batch_first=True),
+            torch.nn.GRU(256, 64, bidirectional=True, batch_first=True),
+            torch.nn.GRU(64, 16, bidirectional=True, batch_first=True),
+            torch.nn.GRU(16, 64, bidirectional=True, batch_first=True),
+            torch.nn.GRU(64, 256, bidirectional=True, batch_first=True),
+            torch.nn.GRU(256, 512 * num_sources, bidirectional=True, batch_first=True),
+        ])
+        self.autoencoder_dropout = torch.nn.Dropout(0.1)
+
+        self.decoder = torch.nn.ConvTranspose1d(
+            in_channels=enc_num_feats,
+            out_channels=1,
+            kernel_size=enc_kernel_size,
+            stride=self.enc_stride,
+            padding=self.enc_stride,
+            bias=False,
+        )
+
+    def forward(self, input: torch.Tensor, test=False, **kwargs) -> torch.Tensor:
+        input = input.unsqueeze(1)
+        """Perform source separation. Generate audio source waveforms.
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
+
+        Returns:
+            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
+        """
+        if input.ndim != 3 or input.shape[1] != 1:
+            raise ValueError(
+                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
+            )
+
+        # B: batch size
+        # L: input frame length
+        # L': padded input frame length
+        # F: feature dimension
+        # M: feature frame length
+        # S: number of sources
+
+        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
+        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
+        feats = self.encoder(padded)  # B, F, M
+
+        # separation module
+        derev_feats = feats.transpose(-2,-1)
+        for layer in self.auto_gru_encoder:
+            derev_feats = layer(derev_feats)[0]
+            derev_feats = derev_feats[...,:derev_feats.shape[-1]//2] + derev_feats[...,derev_feats.shape[-1]//2:]
+            derev_feats = self.autoencoder_dropout(derev_feats)
+        derev_feats = derev_feats.transpose(-2,-1)
+        masked = derev_feats.view(batch_size, self.num_sources, self.enc_num_feats, -1) * feats.unsqueeze(1)
+
+        masked = masked.view(
+            batch_size * self.num_sources, self.enc_num_feats, -1
+        )  # B*S, F, M
+        output = self.decoder(masked)
+        output = output.view(
+            batch_size, self.num_sources, num_padded_frames
+        )  # B, S, L'
+
+        if num_pads > 0:
+            output = output[..., :-num_pads]
+        return output
+
+        

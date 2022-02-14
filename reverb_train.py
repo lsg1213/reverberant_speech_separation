@@ -37,7 +37,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if config.model in no_distance_models:
                 mix, clean = inputs
             else:
-                mix, clean, distance, _ = inputs
+                mix, clean, distance = inputs
                 distance = distance.to(device)
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
