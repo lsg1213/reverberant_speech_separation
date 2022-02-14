@@ -1290,8 +1290,8 @@ class T60_ConvTasNet_v2(ConvTasNet):
             bias=False,
         )
         
-        self.gru = torch.nn.GRU(512 + 1, 128, batch_first=True, bidirectional=True)
-        self.conv = torch.nn.Conv1d(128, 512, kernel_size=1, bias=False)
+        self.gru = torch.nn.GRU(512 + 1, 64, batch_first=True, bidirectional=True)
+        self.conv = torch.nn.Conv1d(64, 512, kernel_size=1, bias=False)
         self.mask_generator = conv_tasnet.MaskGenerator(
             input_dim=enc_num_feats,
             num_sources=num_sources,
@@ -1341,12 +1341,13 @@ class T60_ConvTasNet_v2(ConvTasNet):
         feats = self.encoder(padded)  # B, F, M
 
         t60 = t60.unsqueeze(-1).unsqueeze(-1).repeat((1,1,feats.shape[-1]))
-        feats = torch.cat([feats, t60], 1)
-        feats = self.gru(feats.transpose(-2,-1))[0].transpose(-2,-1)
-        feats = feats[:,:feats.shape[1]//2] + feats[:,feats.shape[1]//2:]
-        feats = self.conv(feats)
+        derev_feats = torch.cat([feats, t60], 1)
+        derev_feats = self.gru(derev_feats.transpose(-2,-1))[0].transpose(-2,-1)
+        derev_feats = derev_feats[:,:derev_feats.shape[1]//2] + derev_feats[:,derev_feats.shape[1]//2:]
+        derev_feats = self.conv(derev_feats)
+
         # separation module
-        masked = self.mask_generator(feats) * feats.unsqueeze(1)  # B, S, F, M
+        masked = self.mask_generator(derev_feats) * feats.unsqueeze(1)  # B, S, F, M
         masked = masked.view(
             batch_size * self.num_sources, self.enc_num_feats, -1
         )  # B*S, F, M
