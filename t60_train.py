@@ -314,6 +314,7 @@ def main(config):
                 tag = callback(results)
                 if tag == False:
                     resume = torch.load(os.path.join(savepath, 'best.pt'))
+                    model = get_model(config)
                     model.load_state_dict(resume['model'])
                     model = model.to(device)
                     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')

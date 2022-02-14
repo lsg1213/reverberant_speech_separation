@@ -265,6 +265,7 @@ def main(config):
                 if tag == False:
                     resume = torch.load(os.path.join(savepath, 'best.pt'))
                     model.load_state_dict(resume['model'])
+                    model = get_model(config)
                     model = model.to(device)
                     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
                     writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
