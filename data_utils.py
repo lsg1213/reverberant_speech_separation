@@ -51,27 +51,11 @@ class LibriMix(Dataset):
         self.task = task
         self.return_id = return_id
         # Get the csv corresponding to the task
-        if task == "enh_single":
-            md_file = [f for f in os.listdir(csv_dir) if "single" in f][0]
-            self.csv_path = os.path.join(self.csv_dir, md_file)
-        elif task == "enh_both":
-            md_file = [f for f in os.listdir(csv_dir) if "both" in f][0]
-            self.csv_path = os.path.join(self.csv_dir, md_file)
-            md_clean_file = [f for f in os.listdir(csv_dir) if "clean" in f][0]
-            self.df_clean = pd.read_csv(os.path.join(csv_dir, md_clean_file))
-        elif task == "sep_clean":
+        if task == "sep_clean":
             md_file = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f and 'rir' not in f][0]
             self.csv_path = os.path.join(self.csv_dir, md_file)
-        elif task == "rir_sep_clean":
-            md_file = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f and 'rir_' in f][0]
-            self.csv_path = os.path.join(self.csv_dir, md_file)
-        elif task == "rirnorm_sep_clean":
-            md_file = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f and 'rirnorm_' in f][0]
-            self.csv_path = os.path.join(self.csv_dir, md_file)
-        elif task == "sep_noisy":
-            md_file = [f for f in os.listdir(csv_dir) if "both" in f][0]
-            self.csv_path = os.path.join(self.csv_dir, md_file)
         else:
+            task = task.replace('_sep_clean', '')
             md_file = [f for f in os.listdir(csv_dir) if "clean" in f and self.mode in f and 'mixture' in f and f'{task}_' in f][0]
             self.csv_path = os.path.join(self.csv_dir, md_file)
         self.segment = segment
