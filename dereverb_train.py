@@ -120,7 +120,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 mix_std = mix_std
                 mix_mean = mix_mean
             outs = model(mix)
-            if config.test:
+            if config.test or 'test' in config.model:
                 logits = outs
             else:
                 logits, sep_logits = outs
@@ -129,17 +129,17 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if config.norm:
                 mix = mix * mix_std + mix_mean
                 logits = logits * mix_std[:,None] + mix_mean[:,None]
-                if not config.test:
+                if not config.test and 'test' not in config.model:
                     sep_logits = sep_logits * mix_std[:,None] + mix_mean[:,None]
             rev_loss = criterion(logits, clean_sep)
-            if not config.test:
+            if not config.test and 'test' not in config.model:
                 sep_loss = criterion(sep_logits, rev_sep)
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
             
-            if not config.test:
+            if not config.test and 'test' not in config.model:
                 loss = rev_loss + sep_loss
             else:
                 loss = rev_loss
@@ -152,16 +152,16 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             losses.append(loss.item())
             if isinstance(rev_loss.tolist(), float):
                 rev_loss = rev_loss.unsqueeze(0)
-            if not config.test and isinstance(sep_loss.tolist(), float):
+            if not config.test and 'test' not in config.model and isinstance(sep_loss.tolist(), float):
                 sep_loss = sep_loss.unsqueeze(0)
             rev_losses += rev_loss.tolist()
-            if not config.test:
+            if not config.test and 'test' not in config.model:
                 sep_losses += sep_loss.tolist()
             mse_score = MSE(logits, clean_sep)
             mses.append(mse_score.item())
 
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses)}
-            if not config.test:
+            if not config.test and 'test' not in config.model:
                 progress_bar_dict['sep_loss'] = np.mean(sep_losses)
             progress_bar_dict['mse_score'] = np.mean(mses)
 
@@ -197,7 +197,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
     writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    if not config.test:
+    if not config.test and 'test' not in config.model:
         writer.add_scalar(f'{mode}/sep_loss', np.mean(sep_losses), epoch)
     writer.add_scalar(f'{mode}/mse_score', np.mean(mses), epoch)
     if mode == 'train':
@@ -226,6 +226,9 @@ def get_model(config):
         if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)(config)
+    elif 'test' in config.model:
+        modelname = 'Dereverb_test_' + splited_name[-1]
+        model = getattr(models, modelname)(config)
     else:
         modelname = 'Dereverb_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)

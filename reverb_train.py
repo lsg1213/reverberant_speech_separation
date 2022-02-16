@@ -21,7 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from models import ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
+from models import ConvTasNet, ConvTasNet_v1, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -58,15 +58,16 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
             if config.model in no_distance_models:
                 logits = model(mix)
-                clean_logits = model(cleanmix)
+                # clean_logits = model(cleanmix)
             else:
                 logits = model(mix, distance)
                 clean_logits = model(cleanmix, torch.zeros_like(distance))
             if config.norm:
                 logits = logits * mix_std + mix_mean
-                clean_logits = clean_logits * clean_std + clean_mean
+                # clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
-            clean_loss = criterion(clean_logits, clean_sep)
+            # clean_loss = criterion(clean_logits, clean_sep)
+            clean_loss = torch.zeros_like(rev_loss)
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
@@ -112,7 +113,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
 def get_model(config):
     if config.model == '':
-        model = torchaudio.models.ConvTasNet(msk_activate='relu')
+        model = ConvTasNet(msk_activate='relu')
     elif config.model == 'v1':
         model = ConvTasNet_v1()
     elif config.model == 'v2':
@@ -264,8 +265,8 @@ def main(config):
                 tag = callback(results)
                 if tag == False:
                     resume = torch.load(os.path.join(savepath, 'best.pt'))
-                    model.load_state_dict(resume['model'])
                     model = get_model(config)
+                    model.load_state_dict(resume['model'])
                     model = model.to(device)
                     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
                     writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])

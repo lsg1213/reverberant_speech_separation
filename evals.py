@@ -57,7 +57,9 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                     mix_std = mix_std.unsqueeze(1)
                     mix_mean = mix_mean.unsqueeze(1)
 
-                if config.model in no_distance_models:
+                if config.model in ('', 'tas', 'dprnn') or 'test' in config.model:
+                    logits = model(mix)
+                elif config.model in no_distance_models:
                     logits = model(mix, test=True)
                 else:
                     logits = model(mix, distance=distance, t60=t60, test=True)
