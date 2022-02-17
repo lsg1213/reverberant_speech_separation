@@ -3,7 +3,7 @@ import os
 import torch
 
 
-no_distance_models = ('', 'tasnet', 'dprnn')
+no_distance_models = ('', 'tasnet', 'dprnn', 'v1')
 
 
 def makedir(dirs):

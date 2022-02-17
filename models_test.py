@@ -121,8 +121,7 @@ class Test:
         config.test = False
         self.make_testdataset(config)
         model = Dereverb_ConvTasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        for rev_sep, clean_sep, _ in self.testset:
             mix = rev_sep.sum(-1)[None].to(self.device)
             dereverb_results, results = model(mix)
             assert results.shape == clean_sep[None].transpose(-2,-1).shape
