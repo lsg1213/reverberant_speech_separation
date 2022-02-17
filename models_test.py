@@ -41,11 +41,10 @@ class Test:
         config.task = 'rir'
         config.model = 'v1'
         self.make_testdataset(config)
-        model = ConvTasNet_v1().to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        model = ConvTasNet(msk_num_layers=5).to(self.device)
+        for rev_sep, clean_sep, _, _ in self.testset:
             mix = rev_sep.sum(-1)[None].to(self.device)
-            results = model(mix, distance)
+            results = model(mix)
             assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def test_ConvTasNet_v2(self):

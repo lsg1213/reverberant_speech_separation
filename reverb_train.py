@@ -61,13 +61,13 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 # clean_logits = model(cleanmix)
             else:
                 logits = model(mix, distance)
-                clean_logits = model(cleanmix, torch.zeros_like(distance))
+                # clean_logits = model(cleanmix, torch.zeros_like(distance))
             if config.norm:
                 logits = logits * mix_std + mix_mean
                 # clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
-            # clean_loss = criterion(clean_logits, clean_sep)
             clean_loss = torch.zeros_like(rev_loss)
+            # clean_loss = criterion(clean_logits, clean_sep)
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
@@ -115,7 +115,7 @@ def get_model(config):
     if config.model == '':
         model = ConvTasNet(msk_activate='relu')
     elif config.model == 'v1':
-        model = ConvTasNet_v1()
+        model = ConvTasNet(msk_activate='relu', msk_num_layers=5)
     elif config.model == 'v2':
         model = ConvTasNet_v2(reverse='reverse' in config.name)
     elif config.model == 'v3':
