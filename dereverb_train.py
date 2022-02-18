@@ -32,60 +32,6 @@ from models import ConvBlock
 import models
 
 
-
-# class dereverb_module(torch.nn.Module):
-#     def __init__(self, input_channel, hidden_channel, kernel_size, layer_num=3) -> None:
-#         super().__init__()
-#         self.hidden_channel = hidden_channel
-#         self.kernel_size = kernel_size
-#         self.layer_num = layer_num
-
-#         self.conv1d = torch.nn.Conv1d(512, self.hidden_channel, 1, bias=False)
-#         self.prelu = torch.nn.PReLU()
-#         # self.convs = torch.nn.Sequential(
-#         #     torch.nn.Conv1d(512, self.hidden_channel, 3, 2),
-#         #     torch.nn.PReLU(),
-#         #     torch.nn.GroupNorm(1, self.hidden_channel),
-#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-#         #     torch.nn.PReLU(),
-#         #     torch.nn.GroupNorm(1, self.hidden_channel),
-#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-#         #     torch.nn.PReLU(),
-#         #     torch.nn.GroupNorm(1, self.hidden_channel),
-#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-#         #     torch.nn.PReLU(),
-#         #     torch.nn.GroupNorm(1, self.hidden_channel),
-#         #     torch.nn.Conv1d(self.hidden_channel, self.hidden_channel, 3, 2),
-#         #     torch.nn.PReLU(),
-#         #     torch.nn.GroupNorm(1, self.hidden_channel)
-#         # )
-#         self.filter = torch.nn.GRU(self.hidden_channel, 512, num_layers=1, batch_first=True, dropout=0.1, bidirectional=True)
-#         # self.chan = torch.nn.Conv1d(1, 512, 1)
-
-#     def pad_for_dereverb_module(self, signal, filter_length):
-#         return F.pad(signal, (filter_length - 1, 0))
-
-#     def forward(self, input: torch.Tensor):
-#         time = input.shape[-1]
-
-#         # outputslice = self.pad_for_dereverb_module(output, layer.kernel_size[-1] * layer.dilation[-1])
-#         # input = input.flip(-1).unsqueeze(1)
-#         # out = self.convs(input)
-#         out = input
-#         out = self.conv1d(out)
-#         out = self.prelu(out)
-#         out, _ = self.filter(out.transpose(-2,-1))
-#         out = out.transpose(-2,-1)
-#         out = out[:,:out.shape[1]//2] + out[:,:out.shape[1]//2] # dimension reduction with summation
-
-
-#         # input = self.pad_for_dereverb_module(input, out.shape[-1])
-#         # out = F.conv2d(input.unsqueeze(0), out.unsqueeze(1), groups=input.shape[0]).squeeze(0).flip(-1)
-#         # out = self.chan(out)
-#         return out 
-#         # return (out.flip(-1) * torch.softmax(out, 1)).sum(1)
-
-
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
@@ -119,28 +65,31 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 mix = (mix - mix_mean) / mix_std
                 mix_std = mix_std
                 mix_mean = mix_mean
-            outs = model(mix)
+            outs = model(mix, test=True)
             if config.test or 'test' in config.model:
                 logits = outs
             else:
-                logits, sep_logits = outs
+                logits = outs
+                # logits, sep_logits = outs
             
 
             if config.norm:
                 mix = mix * mix_std + mix_mean
                 logits = logits * mix_std[:,None] + mix_mean[:,None]
-                if not config.test and 'test' not in config.model:
-                    sep_logits = sep_logits * mix_std[:,None] + mix_mean[:,None]
+                # if not config.test and 'test' not in config.model:
+                    # sep_logits = sep_logits * mix_std[:,None] + mix_mean[:,None]
             rev_loss = criterion(logits, clean_sep)
-            if not config.test and 'test' not in config.model:
-                sep_loss = criterion(sep_logits, rev_sep)
+            # if not config.test and 'test' not in config.model:
+                # sep_loss = criterion(sep_logits, rev_sep)
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
             
             if not config.test and 'test' not in config.model:
-                loss = rev_loss + sep_loss
+                # loss = rev_loss + sep_loss
+                sep_loss = torch.zeros_like(rev_loss)
+                loss = rev_loss
             else:
                 loss = rev_loss
 
