@@ -1,6 +1,7 @@
 import os
 
 from torch import inf, save
+from utils import makedir
 
 
 class Checkpoint:
@@ -34,6 +35,7 @@ class Checkpoint:
         
         cmp = self.cmp(score)
         self.elements['Checkpoint'] = self.state_dict()
+        makedir(self.dir)
         save(self.elements, self.dir)
         if self.verbose:
             print(f'Make checkpoint to {self.dir}')
