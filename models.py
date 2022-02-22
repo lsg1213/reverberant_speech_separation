@@ -1,4 +1,4 @@
-from unicodedata import bidirectional
+from math import ceil
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -112,446 +112,6 @@ class MaskGenerator(torch.nn.Module):
         output = self.output_prelu(output)
         output = self.output_conv(output)
         output = self.mask_activate(output)
-        return output.view(batch_size, self.num_sources, self.output_dim, -1)
-
-
-class SlimmableConv1dTranspose(torch.nn.ConvTranspose1d):
-    def __init__(self, in_channel_max, out_channel_max,
-                 kernel_size, stride=1, padding=0, dilation=1,
-                 groups=1, bias=True):
-        super(SlimmableConv1dTranspose, self).__init__(
-            in_channel_max, out_channel_max,
-            kernel_size, stride=stride, padding=padding, dilation=dilation,
-            groups=groups, bias=bias)
-        self.in_channels = in_channel_max
-        self.out_channels = out_channel_max
-        self.groups = groups
-
-    def forward(self, input, channel_ratio, ratio_range):
-        channel_range = torch.tensor(ratio_range, dtype=self.weight.dtype, device=self.weight.device) * self.weight.shape[0]
-        min_chan = channel_range[0]
-        max_chan = channel_range[1]
-        channel_num = ((max_chan - min_chan) * channel_ratio).long() + min_chan
-        channel_num = channel_num.unsqueeze(-1).expand(channel_num.shape[0], 2).reshape(-1)
-        
-        def conv_transpose_1d(idx): # idx: batch index
-            number = channel_num[idx].int()
-            weight = self.weight[:number, ...]
-            if self.bias is not None:
-                bias = self.bias[:number]
-            else:
-                bias = self.bias
-            y = F.conv_transpose1d(
-                input[idx:idx+1, :number], weight, bias, self.stride, self.padding,
-                dilation=self.dilation, groups=self.groups)
-            return y
-
-        y = torch.cat(list(map(conv_transpose_1d, range(input.shape[0]))), 0)
-        return y
-
-
-# decoder를 slimmable network로 대체
-class ConvTasNet_v2(ConvTasNet):
-    """Conv-TasNet: a fully-convolutional time-domain audio separation network
-    *Conv-TasNet: Surpassing Ideal Time–Frequency Magnitude Masking for Speech Separation*
-    [:footcite:`Luo_2019`].
-
-    Args:
-        num_sources (int, optional): The number of sources to split.
-        enc_kernel_size (int, optional): The convolution kernel size of the encoder/decoder, <L>.
-        enc_num_feats (int, optional): The feature dimensions passed to mask generator, <N>.
-        msk_kernel_size (int, optional): The convolution kernel size of the mask generator, <P>.
-        msk_num_feats (int, optional): The input/output feature dimension of conv block in the mask generator, <B, Sc>.
-        msk_num_hidden_feats (int, optional): The internal feature dimension of conv block of the mask generator, <H>.
-        msk_num_layers (int, optional): The number of layers in one conv block of the mask generator, <X>.
-        msk_num_stacks (int, optional): The numbr of conv blocks of the mask generator, <R>.
-        msk_activate (str, optional): The activation function of the mask output (Default: ``sigmoid``).
-
-    Note:
-        This implementation corresponds to the "non-causal" setting in the paper.
-    """
-
-    def __init__(
-        self,
-        num_sources: int = 2,
-        # encoder/decoder parameters
-        enc_kernel_size: int = 16,
-        enc_num_feats: int = 512,
-        # mask generator parameters
-        msk_kernel_size: int = 3,
-        msk_num_feats: int = 128,
-        msk_num_hidden_feats: int = 512,
-        msk_num_layers: int = 8,
-        msk_num_stacks: int = 3,
-        msk_activate: str = "sigmoid",
-        reverse: bool = True,
-    ):
-        super(ConvTasNet_v2, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
-
-        self.num_sources = num_sources
-        self.enc_num_feats = enc_num_feats
-        self.enc_kernel_size = enc_kernel_size
-        self.enc_stride = enc_kernel_size // 2
-        self.reverse = reverse
-
-        self.encoder = torch.nn.Conv1d(
-            in_channels=1,
-            out_channels=enc_num_feats,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-        self.mask_generator = MaskGenerator(
-            input_dim=enc_num_feats,
-            output_dim = enc_num_feats,
-            num_sources=num_sources,
-            kernel_size=msk_kernel_size,
-            num_feats=msk_num_feats,
-            num_hidden=msk_num_hidden_feats,
-            num_layers=msk_num_layers,
-            num_stacks=msk_num_stacks,
-            msk_activate=msk_activate,
-        )
-        self.decoder = SlimmableConv1dTranspose(
-            in_channel_max=enc_num_feats,
-            out_channel_max=1,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-
-    def forward(self, input: torch.Tensor, distance: torch.Tensor) -> torch.Tensor:
-        input = input.unsqueeze(1)
-        """Perform source separation. Generate audio source waveforms.
-
-        Args:
-            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
-
-        Returns:
-            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
-        """
-        if input.ndim != 3 or input.shape[1] != 1:
-            raise ValueError(
-                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
-            )
-
-        # B: batch size
-        # L: input frame length
-        # L': padded input frame length
-        # F: feature dimension
-        # M: feature frame length
-        # S: number of sources
-
-        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
-        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
-        feats = self.encoder(padded)  # B, F, M
-
-        mask_in_feats = feats
-            
-        masked = self.mask_generator(mask_in_feats) * feats.unsqueeze(1)  # B, S, F, M
-
-        masked = masked.view(
-            batch_size * self.num_sources, self.enc_num_feats, -1
-        )  # B*S, F, M  
-
-        dis = distance
-        dis = torch.round(dis / 0.042875).long()
-
-        # distance range 0.5 ~ 2.0 m
-        dis_max = torch.round(torch.ones_like(dis) * 2 / 0.042875).long()
-
-        # channel ratio 0.5 ~ 1.0: whole channel * channel ratio => used channel
-        ratio_range = [0.5, 1.]
-
-        # decoded = self.decoder(masked, dis / dis_max, ratio_range)  # B*S, 1, L'
-        if self.reverse:
-            decoded = self.decoder(masked, 1. - dis / dis_max, ratio_range)  # distance가 멀수록 적게 사용, reverse
-        else:
-            decoded = self.decoder(masked, dis / dis_max, ratio_range)  # distance가 멀수록 많이 사용
-
-        output = decoded.view(
-            batch_size, self.num_sources, num_padded_frames
-        )  # B, S, L'
-        if num_pads > 0:
-            output = output[..., :-num_pads]  # B, S, L
-        return output
-
-
-class SlimmableSeparableConv1d(torch.nn.Conv1d):
-    def __init__(self, in_channels_max, out_channels_max,
-                 kernel_size, stride=1, padding=0, dilation=1,
-                 groups=1, bias=True):
-        super(SlimmableSeparableConv1d, self).__init__(
-            in_channels_max, out_channels_max,
-            kernel_size, stride=stride, padding=padding, dilation=dilation,
-            groups=groups, bias=bias)
-        self.in_channels_max = in_channels_max
-        self.out_channels_max = out_channels_max
-        self.groups = groups # no use
-        self.pointwise_weight = Parameter(torch.empty((out_channels_max, out_channels_max, 1), device=self.weight.device, dtype=self.weight.dtype))
-        torch.nn.init.kaiming_uniform_(self.pointwise_weight, a=5 ** 0.5)
-
-    def forward(self, input, channel_ratio, ratio_range):
-        input_chan = input.shape[1]
-        channel_range = torch.tensor(ratio_range, dtype=self.weight.dtype, device=self.weight.device) * self.weight.shape[0]
-        min_chan = channel_range[0]
-        max_chan = channel_range[1]
-        channel_num = ((max_chan - min_chan) * channel_ratio).int() + min_chan
-
-        def conv_1d(idx): # idx: batch index
-            number = channel_num[idx].int()
-            weight = self.weight[:number, :input_chan, ...]
-            if self.bias is not None:
-                bias = self.bias[:number]
-            else:
-                bias = self.bias
-            y = F.conv1d(input[idx:idx+1, :number], weight, None, self.stride, self.padding, dilation=self.dilation, groups=input.shape[1]) # separable
-            y = F.conv1d(y, self.pointwise_weight[:, :number], bias) # pointwise
-            return y
-            
-        y = torch.cat(list(map(conv_1d, range(input.shape[0]))), 0)
-        return y
-
-
-# encoder를 slimmable network로 대체
-class ConvTasNet_v3(ConvTasNet):
-    """Conv-TasNet: a fully-convolutional time-domain audio separation network
-    *Conv-TasNet: Surpassing Ideal Time–Frequency Magnitude Masking for Speech Separation*
-    [:footcite:`Luo_2019`].
-
-    Args:
-        num_sources (int, optional): The number of sources to split.
-        enc_kernel_size (int, optional): The convolution kernel size of the encoder/decoder, <L>.
-        enc_num_feats (int, optional): The feature dimensions passed to mask generator, <N>.
-        msk_kernel_size (int, optional): The convolution kernel size of the mask generator, <P>.
-        msk_num_feats (int, optional): The input/output feature dimension of conv block in the mask generator, <B, Sc>.
-        msk_num_hidden_feats (int, optional): The internal feature dimension of conv block of the mask generator, <H>.
-        msk_num_layers (int, optional): The number of layers in one conv block of the mask generator, <X>.
-        msk_num_stacks (int, optional): The numbr of conv blocks of the mask generator, <R>.
-        msk_activate (str, optional): The activation function of the mask output (Default: ``sigmoid``).
-
-    Note:
-        This implementation corresponds to the "non-causal" setting in the paper.
-    """
-
-    def __init__(
-        self,
-        num_sources: int = 2,
-        # encoder/decoder parameters
-        enc_kernel_size: int = 16,
-        enc_num_feats: int = 512,
-        # mask generator parameters
-        msk_kernel_size: int = 3,
-        msk_num_feats: int = 128,
-        msk_num_hidden_feats: int = 512,
-        msk_num_layers: int = 8,
-        msk_num_stacks: int = 3,
-        msk_activate: str = "sigmoid",
-        reverse: bool = True,
-    ):
-        super(ConvTasNet_v3, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
-
-        self.num_sources = num_sources
-        self.enc_num_feats = enc_num_feats
-        self.enc_kernel_size = enc_kernel_size
-        self.enc_stride = enc_kernel_size // 2
-        self.reverse = reverse
-
-        self.encoder = SlimmableSeparableConv1d(
-            in_channels_max=1,
-            out_channels_max=enc_num_feats,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-        self.mask_generator = MaskGenerator(
-            input_dim=enc_num_feats,
-            output_dim = enc_num_feats,
-            num_sources=num_sources,
-            kernel_size=msk_kernel_size,
-            num_feats=msk_num_feats,
-            num_hidden=msk_num_hidden_feats,
-            num_layers=msk_num_layers,
-            num_stacks=msk_num_stacks,
-            msk_activate=msk_activate,
-        )
-        self.decoder = SlimmableConv1dTranspose(
-            in_channel_max=enc_num_feats,
-            out_channel_max=1,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-
-    def forward(self, input: torch.Tensor, distance: torch.Tensor) -> torch.Tensor:
-        input = input.unsqueeze(1)
-        """Perform source separation. Generate audio source waveforms.
-
-        Args:
-            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
-
-        Returns:
-            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
-        """
-        if input.ndim != 3 or input.shape[1] != 1:
-            raise ValueError(
-                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
-            )
-
-        # B: batch size
-        # L: input frame length
-        # L': padded input frame length
-        # F: feature dimension
-        # M: feature frame length
-        # S: number of sources
-
-        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
-        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
-
-        # distance range 0.5 ~ 2.0 m
-        dis = distance
-        dis = torch.round(dis / 0.042875).long()
-        dis_max = torch.round(torch.ones_like(dis) * 2 / 0.042875).long()
-        dis_ratio = 1 - dis / dis_max if self.reverse else dis / dis_max
-
-        # channel ratio 0.5 ~ 1.0: whole channel * channel ratio => used channel
-        ratio_range = [0.5, 1.]
-
-        feats = self.encoder(padded, 1 - dis / dis_max, ratio_range)  # B, F, M
-
-        mask_in_feats = feats
-            
-        masked = self.mask_generator(mask_in_feats) * feats.unsqueeze(1)  # B, S, F, M
-
-        masked = masked.view(
-            batch_size * self.num_sources, self.enc_num_feats, -1
-        )  # B*S, F, M  
-
-
-        decoded = self.decoder(masked, 1 - dis / dis_max, ratio_range)  # B*S, 1, L'
-        # decoded = self.decoder(masked)
-
-        output = decoded.view(
-            batch_size, self.num_sources, num_padded_frames
-        )  # B, S, L'
-        if num_pads > 0:
-            output = output[..., :-num_pads]  # B, S, L
-        return output
-
-
-class ConvTasNet_feedback(ConvTasNet):
-    """Conv-TasNet: a fully-convolutional time-domain audio separation network
-    *Conv-TasNet: Surpassing Ideal Time–Frequency Magnitude Masking for Speech Separation*
-    [:footcite:`Luo_2019`].
-
-    Args:
-        num_sources (int, optional): The number of sources to split.
-        enc_kernel_size (int, optional): The convolution kernel size of the encoder/decoder, <L>.
-        enc_num_feats (int, optional): The feature dimensions passed to mask generator, <N>.
-        msk_kernel_size (int, optional): The convolution kernel size of the mask generator, <P>.
-        msk_num_feats (int, optional): The input/output feature dimension of conv block in the mask generator, <B, Sc>.
-        msk_num_hidden_feats (int, optional): The internal feature dimension of conv block of the mask generator, <H>.
-        msk_num_layers (int, optional): The number of layers in one conv block of the mask generator, <X>.
-        msk_num_stacks (int, optional): The numbr of conv blocks of the mask generator, <R>.
-        msk_activate (str, optional): The activation function of the mask output (Default: ``sigmoid``).
-
-    Note:
-        This implementation corresponds to the "non-causal" setting in the paper.
-    """
-
-    def __init__(
-        self,
-        num_sources: int = 2,
-        # encoder/decoder parameters
-        enc_kernel_size: int = 16,
-        enc_num_feats: int = 512,
-        # mask generator parameters
-        msk_kernel_size: int = 3,
-        msk_num_feats: int = 128,
-        msk_num_hidden_feats: int = 512,
-        msk_num_layers: int = 8,
-        msk_num_stacks: int = 3,
-        msk_activate: str = "sigmoid",
-    ):
-        super(ConvTasNet_feedback, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
-
-        self.num_sources = num_sources
-        self.enc_num_feats = enc_num_feats
-        self.enc_kernel_size = enc_kernel_size
-        self.enc_stride = enc_kernel_size // 2
-
-        self.encoder = torch.nn.Conv1d(
-            in_channels=1,
-            out_channels=enc_num_feats,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-        self.mask_generator = MaskGenerator(
-            input_dim=enc_num_feats,
-            output_dim = enc_num_feats,
-            num_sources=num_sources,
-            kernel_size=msk_kernel_size,
-            num_feats=msk_num_feats,
-            num_hidden=msk_num_hidden_feats,
-            num_layers=msk_num_layers,
-            num_stacks=msk_num_stacks,
-            msk_activate=msk_activate,
-        )
-        self.decoder = torch.nn.ConvTranspose1d(
-            in_channels=enc_num_feats,
-            out_channels=1,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        input = input.unsqueeze(1)
-        """Perform source separation. Generate audio source waveforms.
-
-        Args:
-            input (torch.Tensor): 3D Tensor with shape [batch, channel==1, frames]
-
-        Returns:
-            Tensor: 3D Tensor with shape [batch, channel==num_sources, frames]
-        """
-        if input.ndim != 3 or input.shape[1] != 1:
-            raise ValueError(
-                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
-            )
-
-        # B: batch size
-        # L: input frame length
-        # L': padded input frame length
-        # F: feature dimension
-        # M: feature frame length
-        # S: number of sources
-
-        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
-        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
-        feats = self.encoder(padded)  # B, F, M
-        
-        mask_in_feats = feats
-            
-        masked = self.mask_generator(mask_in_feats) * feats.unsqueeze(1)  # B, S, F, M
-
-        masked = masked.view(
-            batch_size * self.num_sources, self.enc_num_feats, -1 # + int(distance is not None)
-        )  # B*S, F, M  
-        decoded = self.decoder(masked)  # B*S, 1, L'
-        output = decoded.view(
-            batch_size, self.num_sources, num_padded_frames
-        )  # B, S, L'
-        if num_pads > 0:
-            output = output[..., :-num_pads]  # B, S, L
-        return output
 
 
 class TasNet(nn.Module):
@@ -897,49 +457,38 @@ class Dereverb_TasNet_v1(nn.Module):
 
 
 class Dereverb_T60_module(torch.nn.Module):
-    def __init__(self, config, input_channel, hidden_channel, kernel_size=None) -> None:
+    def __init__(self, config, input_channel, hidden_channel, kernel_size=None, strides=16) -> None:
         super().__init__()
         self.input_channel = input_channel
         self.hidden_channel = hidden_channel
         self.kernel_size = kernel_size
         self.config = config
-        self.version = 'v2'
-
-        if 'v2' not in self.version:
-            alpha = torch.rand((self.hidden_channel, 1), requires_grad=True)
-            beta = torch.rand((self.hidden_channel, 1), requires_grad=True)
-            self.kernel = []
-            for i in range(self.hidden_channel):
-                kernel = []
-                for j in range(1):
-                    kernel.append(alpha[i, j] * torch.arange(0, beta[i, j].item(), beta[i, j].item() / self.kernel_size, dtype=torch.float32, requires_grad=True)[:self.kernel_size])
-                self.kernel.append(torch.stack(kernel, 0))
-            self.kernel = torch.nn.Parameter(torch.stack(self.kernel, 0))
-            self.kernel_weight = torch.nn.Parameter(torch.rand((self.hidden_channel, 1, self.kernel_size), requires_grad=True))
-            self.prelu = torch.nn.PReLU()
-
-        if 'v1' not in self.version:
-            self.gru = torch.nn.GRU(self.input_channel, self.input_channel, batch_first=True, bidirectional=True)
+        self.strides = 16
+        self.gru = torch.nn.GRU(1, 16, batch_first=True, bidirectional=True)
         
     def pad_for_dereverb_module(self, signal, filter_length):
         return F.pad(signal, (filter_length - 1, 0))
             
-    def forward(self, input: torch.Tensor):
-        if 'v2' in self.version:
-            out = input
-        else:
-            kernel = self.kernel * self.kernel_weight
-            batch, feat, time = input.shape
-            input = self.pad_for_dereverb_module(input, self.kernel_size)
-            pad_time = input.shape[-1]
-            input = input.reshape([-1, pad_time])
-            out = F.conv1d(input.unsqueeze(1).flip(-1), kernel).flip(-1)
-            out = out.sum(1).reshape((batch, feat, time))
-            out = self.prelu(out)
-        if 'v1' not in self.version:
-            out = self.gru(out.transpose(-2, -1))[0].transpose(-2, -1)
-            out = out[:, :out.shape[1] // 2] + out[:, out.shape[1] // 2:]
-        return out
+    def forward(self, input: torch.Tensor, t60s):
+        # input = (batch * 2, num_feats, time)
+        t60s = t60s.repeat((2)) # 1000 = 8000 / 8
+        batch = input.shape[0]
+        out = []
+        for i in range(batch):
+            inp = input[i]
+            t60 = t60s[i]
+            t60 = int(t60 * 1000)
+            inp = inp.flip(-1)
+            gruouts = []
+            for j in range(int(ceil(inp.shape[-1] / self.strides))):
+                gruinp = inp[..., j * self.strides: j * self.strides + t60].unsqueeze(-1)
+                gruout = self.gru(gruinp)[0]
+                gruout = gruout[..., -self.strides:, :gruout.shape[-1]//2] + gruout[..., -self.strides:, gruout.shape[-1]//2:]
+                gruout = gruout.mean(-1) # global average pooling
+                gruouts.append(gruout)
+            gruouts = torch.cat(gruouts, -1)
+            out.append(gruouts.flip(-1))
+        return torch.stack(out)
 
 
 class T60_MaskGenerator(torch.nn.Module):
@@ -1027,6 +576,48 @@ class T60_MaskGenerator(torch.nn.Module):
         return output.view(batch_size, self.num_sources, self.output_dim, -1)
 
 
+class Dereverb_T60_encoder(torch.nn.Module):
+    def __init__(self, in_channels=1, out_channels=512, kernel_size=16, stride=8, padding=8, bias=False) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.bias = bias
+
+        self.kernel_weight = torch.nn.Parameter(torch.rand((41, out_channels, in_channels, kernel_size)))
+        
+    def forward(self, input: torch.Tensor, t60s):
+        # input = (batch, 1, 24000)
+        outs = []
+        t60s = torch.round(t60s * 100).int() - 10
+        for t60, inp in zip(t60s, input):
+            outs.append(F.conv1d(inp.unsqueeze(0), self.kernel_weight[t60], stride=self.stride, padding=self.padding))
+        return torch.cat(outs, 0)
+
+
+class Dereverb_T60_decoder(torch.nn.Module):
+    def __init__(self, in_channels=1, out_channels=512, kernel_size=16, stride=8, padding=8, bias=False) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.bias = bias
+
+        self.kernel_weight = torch.nn.Parameter(torch.rand((41, in_channels, out_channels, kernel_size)))
+        
+    def forward(self, input: torch.Tensor, t60s):
+        # input = (batch, 1, 24000)
+        outs = []
+        t60s = torch.round(t60s * 100).int().repeat((2)) - 10
+        for t60, inp in zip(t60s, input):
+            outs.append(F.conv_transpose1d(inp.unsqueeze(0), self.kernel_weight[t60], stride=self.stride, padding=self.padding))
+        return torch.cat(outs, 0)
+
+
 class T60_ConvTasNet_v1(ConvTasNet):
     def __init__(
         self,
@@ -1050,7 +641,7 @@ class T60_ConvTasNet_v1(ConvTasNet):
         self.enc_kernel_size = enc_kernel_size
         self.enc_stride = enc_kernel_size // 2
 
-        self.encoder = torch.nn.Conv1d(
+        self.encoder = Dereverb_T60_encoder(
             in_channels=1,
             out_channels=enc_num_feats,
             kernel_size=enc_kernel_size,
@@ -1061,7 +652,7 @@ class T60_ConvTasNet_v1(ConvTasNet):
         
         self.mask_generator = conv_tasnet.MaskGenerator(
             input_dim=enc_num_feats,
-            num_sources=num_sources * 2,
+            num_sources=num_sources,
             kernel_size=msk_kernel_size,
             num_feats=msk_num_feats,
             num_hidden=msk_num_hidden_feats,
@@ -1071,10 +662,9 @@ class T60_ConvTasNet_v1(ConvTasNet):
         )
 
         # 8000(sampling rate) * 0.5(T60 maximum value) / 8(encoded feature resolution)
-        # rir_func_length = np.ceil(8000 * 0.1 / 8).astype(np.int32)
-        # self.dereverb_module = Dereverb_T60_module(config, enc_num_feats, 64, rir_func_length)
+        # self.dereverb_module = Dereverb_T60_module(config, enc_num_feats, msk_num_feats, strides=128)
 
-        self.decoder = torch.nn.ConvTranspose1d(
+        self.decoder = Dereverb_T60_decoder(
             in_channels=enc_num_feats,
             out_channels=1,
             kernel_size=enc_kernel_size,
@@ -1106,21 +696,27 @@ class T60_ConvTasNet_v1(ConvTasNet):
         # S: number of sources
 
         t60 = kwargs.get('t60')
+        # clean_sep = kwargs.get('clean')
 
         padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
-        feats = self.encoder(padded)  # B, F, M
+        feats = self.encoder(padded, t60)  # B, F, M
+        # if clean_sep is not None:
+        #     clean_padded, _ = self._align_num_frames_with_strides(clean_sep)
+        #     clean_padded = clean_padded.view(
+        #         batch_size * self.num_sources, -1 ,clean_padded.shape[-1]
+        #     )
+        #     clean_sep = self.encoder(clean_padded)
 
         # separation module
         mask = self.mask_generator(feats)
         
-        masked = mask[:,:self.num_sources] * feats.unsqueeze(1)  # B, S, F, M
-        masked -= mask[:,self.num_sources] * t60
+        masked_feature = mask * feats.unsqueeze(1)  # B, S, F, M
         
-        masked = masked.view(
+        masked = masked_feature.view(
             batch_size * self.num_sources, self.enc_num_feats, -1
         )  # B*S, F, M
-        output = self.decoder(masked)
+        output = self.decoder(masked, t60)
         output = output.view(
             batch_size, self.num_sources, num_padded_frames
         )  # B, S, L'
@@ -1262,12 +858,10 @@ class Dereverb_test_v2(ConvTasNet):
         )
 
         self.auto_gru_encoder = torch.nn.ModuleList([
-            torch.nn.GRU(512, 256, bidirectional=True, batch_first=True),
-            torch.nn.GRU(256, 64, bidirectional=True, batch_first=True),
-            torch.nn.GRU(64, 16, bidirectional=True, batch_first=True),
-            torch.nn.GRU(16, 64, bidirectional=True, batch_first=True),
-            torch.nn.GRU(64, 256, bidirectional=True, batch_first=True),
-            torch.nn.GRU(256, 512 * num_sources, bidirectional=True, batch_first=True),
+            torch.nn.GRU(512, 128, bidirectional=True, batch_first=True),
+            torch.nn.GRU(128, 16, bidirectional=True, batch_first=True),
+            torch.nn.GRU(16, 128, bidirectional=True, batch_first=True),
+            torch.nn.GRU(128, 512 * num_sources, bidirectional=True, batch_first=True),
         ])
         self.autoencoder_dropout = torch.nn.Dropout(0.1)
 
@@ -1313,7 +907,7 @@ class Dereverb_test_v2(ConvTasNet):
             derev_feats = derev_feats[...,:derev_feats.shape[-1]//2] + derev_feats[...,derev_feats.shape[-1]//2:]
             derev_feats = self.autoencoder_dropout(derev_feats)
         derev_feats = derev_feats.transpose(-2,-1)
-        masked = derev_feats.view(batch_size, self.num_sources, self.enc_num_feats, -1)
+        masked = derev_feats.view(batch_size, self.num_sources, self.enc_num_feats, -1) * feats.unsqueeze(1)
 
         masked = masked.view(
             batch_size * self.num_sources, self.enc_num_feats, -1
@@ -1361,8 +955,6 @@ class Dereverb_test_v3(ConvTasNet):
         )
 
         self.auto_gru_encoder = torch.nn.ModuleList([
-            torch.nn.GRU(512, 512, bidirectional=True, batch_first=True),
-            torch.nn.GRU(512, 512, bidirectional=True, batch_first=True),
             torch.nn.GRU(512, 512, bidirectional=True, batch_first=True),
             torch.nn.GRU(512, 512, bidirectional=True, batch_first=True),
             torch.nn.GRU(512, 512, bidirectional=True, batch_first=True),
@@ -1424,5 +1016,247 @@ class Dereverb_test_v3(ConvTasNet):
 
         if num_pads > 0:
             output = output[..., :-num_pads]
+        return output
+
+
+class DualConvBlock(torch.nn.Module):
+    def __init__(
+        self,
+        io_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        padding: int,
+        dilation: int = 1,
+        no_residual = None,
+    ):
+        super().__init__()
+
+        self.conv_layers = torch.nn.Sequential(
+            torch.nn.Conv1d(
+                in_channels=io_channels, out_channels=hidden_channels, kernel_size=1
+            ),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08),
+            torch.nn.Conv1d(
+                in_channels=hidden_channels,
+                out_channels=hidden_channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                dilation=dilation,
+                groups=hidden_channels,
+            ),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08),
+        )
+
+        self.conv_layers2 = torch.nn.Sequential(
+            torch.nn.Conv1d(
+                in_channels=io_channels, out_channels=hidden_channels, kernel_size=1
+            ),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08),
+            torch.nn.Conv1d(
+                in_channels=hidden_channels,
+                out_channels=hidden_channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                dilation=dilation,
+                groups=hidden_channels,
+            ),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08),
+        )
+
+        self.res_out = no_residual
+        self.Linear = torch.nn.Linear(hidden_channels, io_channels)
+        self.Linear_norm = GlobLN(io_channels)
+
+        self.Linear2 = torch.nn.Linear(hidden_channels, io_channels)
+        self.Linear_norm2 = GlobLN(io_channels)
+        self.hidden_channels = hidden_channels
+
+    def forward(self, input: torch.Tensor):
+        B, N, K, L = input.shape
+        output = input
+        feats = input.permute(0, 3, 1, 2).reshape(B * L, N, K)
+        feats = self.conv_layers(feats)
+        feats = self.Linear(feats.transpose(-2,-1))
+        feats = feats.reshape(B, L, K, N).transpose(1, 3)
+        feats = self.Linear_norm(feats)
+        output += feats
+        feats = output.permute(0, 2, 1, 3).reshape(B * K, N, L)
+        feats = self.conv_layers2(feats)
+        feats = self.Linear2(feats.transpose(-2,-1))
+        feats = feats.reshape((B, K, L, N)).permute((0, 3, 1, 2)).contiguous()
+        feats = self.Linear_norm2(feats)
+        output += feats
+
+        if self.res_out is None:
+            residual = None
+        else:
+            residual = input
+        skip_out = output
+        return residual, skip_out
+
+
+class newMaskGenerator(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        num_sources: int,
+        kernel_size: int,
+        num_feats: int,
+        num_hidden: int,
+        num_layers: int,
+        num_stacks: int,
+        msk_activate: str,
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.num_sources = num_sources
+        self.chunk_size = 500
+        self.hop_size = self.chunk_size // 2
+
+        self.input_norm = torch.nn.GroupNorm(
+            num_groups=1, num_channels=input_dim, eps=1e-8
+        )
+        self.input_conv = torch.nn.Conv1d(
+            in_channels=input_dim, out_channels=num_feats, kernel_size=1
+        )
+
+        self.receptive_field = 0
+        self.conv_layers = torch.nn.ModuleList([])
+        for s in range(num_stacks):
+            for l in range(num_layers):
+                multi = 2 ** l
+                self.conv_layers.append(
+                    DualConvBlock(
+                        io_channels=num_feats,
+                        hidden_channels=num_hidden,
+                        kernel_size=kernel_size,
+                        dilation=multi,
+                        padding=multi,
+                        # The last ConvBlock does not need residual
+                        no_residual=(l == (num_layers - 1) and s == (num_stacks - 1)),
+                    )
+                )
+                self.receptive_field += (
+                    kernel_size if s == 0 and l == 0 else (kernel_size - 1) * multi
+                )
+        self.mask_conv = torch.nn.Sequential(
+            nn.PReLU(),
+            nn.Conv2d(num_feats, num_sources * num_feats, 1)
+        )
+        self.net_out = nn.Sequential(nn.Conv1d(num_feats, num_feats, 1), nn.Tanh())
+        self.net_gate = nn.Sequential(nn.Conv1d(num_feats, num_feats, 1), nn.Sigmoid())
+        self.output_prelu = torch.nn.PReLU()
+        self.output_conv = torch.nn.Conv1d(
+            in_channels=num_feats, out_channels=input_dim, kernel_size=1,
+        )
+        if msk_activate == "sigmoid":
+            self.mask_activate = torch.nn.Sigmoid()
+        elif msk_activate == "relu":
+            self.mask_activate = torch.nn.ReLU()
+        else:
+            raise ValueError(f"Unsupported activation {msk_activate}")
+
+    def forward(self, input: torch.Tensor, dis=None) -> torch.Tensor:
+        """Generate separation mask.
+
+        Args:
+            input (torch.Tensor): 3D Tensor with shape [batch, features, frames]
+
+        Returns:
+            Tensor: shape [batch, num_sources, features, frames]
+        """
+        batch_size = input.shape[0]
+        n_frames = input.shape[-1]
+        feats = self.input_norm(input)
+        if dis is not None:
+            feats = torch.cat([feats, dis], 1)
+        feats = self.input_conv(feats)
+        feats = F.unfold(feats.unsqueeze(-1), kernel_size=(self.chunk_size, 1), padding=(self.chunk_size, 0), stride=(self.hop_size, 1),)
+        n_chunks = feats.shape[-1]
+        feats = feats.reshape(batch_size, -1, self.chunk_size, n_chunks)
+        
+        output = 0.0
+        for layer in self.conv_layers:
+            residual, skip = layer(feats)
+            if residual is not None:  # the last conv layer does not produce residual
+                feats = feats + residual
+            output = output + skip
+        output = self.mask_conv(output)
+        to_unfold = output.shape[1] // 2 * output.shape[2]
+
+        output = F.fold(output.reshape((batch_size * self.num_sources, to_unfold, n_chunks)),
+            (n_frames, 1),
+            kernel_size=(self.chunk_size, 1),
+            padding=(self.chunk_size, 0),
+            stride=(self.hop_size, 1),)
+
+        output = output.reshape(batch_size * self.num_sources, output.shape[1], -1)
+        output = self.net_out(output) * self.net_gate(output)
+
+        output = self.output_prelu(output)
+        output = self.output_conv(output)
+        output = self.mask_activate(output)
+        return output.view(batch_size, self.num_sources, self.input_dim, -1)
+
+
+class ConvTasNet_v2(ConvTasNet):
+    def __init__(
+        self,
+        num_sources: int = 2,
+        # encoder/decoder parameters
+        enc_kernel_size: int = 16,
+        enc_num_feats: int = 512,
+        # mask generator parameters
+        msk_kernel_size: int = 3,
+        msk_num_feats: int = 128,
+        msk_num_hidden_feats: int = 256,
+        msk_num_layers: int = 8,
+        msk_num_stacks: int = 3,
+        msk_activate: str = "sigmoid",
+        **kwargs
+    ):
+        super(ConvTasNet_v2, self).__init__(num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+
+        self.num_sources = num_sources
+        self.enc_num_feats = enc_num_feats
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_stride = enc_kernel_size // 2
+
+        self.mask_generator = newMaskGenerator(
+            input_dim=enc_num_feats,
+            num_sources=num_sources,
+            kernel_size=msk_kernel_size,
+            num_feats=msk_num_feats,
+            num_hidden=msk_num_hidden_feats,
+            num_layers=msk_num_layers,
+            num_stacks=msk_num_stacks,
+            msk_activate=msk_activate,
+        )
+
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        input = input.unsqueeze(1)
+        if input.ndim != 3 or input.shape[1] != 1:
+            raise ValueError(
+                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
+            )
+
+        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
+        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
+        feats = self.encoder(padded)  # B, F, M
+        masked = self.mask_generator(feats) * feats.unsqueeze(1)  # B, S, F, M
+        masked = masked.view(
+            batch_size * self.num_sources, self.enc_num_feats, -1
+        )  # B*S, F, M
+        decoded = self.decoder(masked)  # B*S, 1, L'
+        output = decoded.view(
+            batch_size, self.num_sources, num_padded_frames
+        )  # B, S, L'
+        if num_pads > 0:
+            output = output[..., :-num_pads]  # B, S, L
         return output
 

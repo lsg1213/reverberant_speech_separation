@@ -118,7 +118,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if config.test:
                 mixcat = mix.unsqueeze(1)
             else:
-                mixcat = torch.stack([mix, mix], 1)
+                mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
             input_score = - metric(mixcat, clean_sep).squeeze()
             if isinstance(output_score.tolist(), float):
                 output_score = output_score.unsqueeze(0)

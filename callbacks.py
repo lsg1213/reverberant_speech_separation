@@ -35,7 +35,7 @@ class Checkpoint:
         
         cmp = self.cmp(score)
         self.elements['Checkpoint'] = self.state_dict()
-        makedir(self.dir)
+        makedir('/'.join(self.dir.split('/')[:-1]))
         save(self.elements, self.dir)
         if self.verbose:
             print(f'Make checkpoint to {self.dir}')
