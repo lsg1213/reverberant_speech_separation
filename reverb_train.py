@@ -21,7 +21,7 @@ from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
-from models import ConvTasNet, ConvTasNet_v2, ConvTasNet_v3, TasNet, DPRNNTasNet
+from models import *
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -30,8 +30,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     scores = []
     input_scores = []
     output_scores = []
-    rev_losses = []
-    clean_losses = []
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             if config.model in no_distance_models:
@@ -58,22 +56,17 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
             if config.model in no_distance_models:
                 logits = model(mix)
-                # clean_logits = model(cleanmix)
             else:
-                logits = model(mix, distance)
-                # clean_logits = model(cleanmix, torch.zeros_like(distance))
+                logits = model(mix, distance=distance)
             if config.norm:
                 logits = logits * mix_std + mix_mean
-                # clean_logits = clean_logits * clean_std + clean_mean
             rev_loss = criterion(logits, clean_sep)
-            clean_loss = torch.zeros_like(rev_loss)
-            # clean_loss = criterion(clean_logits, clean_sep)
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
 
-            loss = rev_loss + clean_loss
+            loss = rev_loss
 
             if mode == 'train':
                 optimizer.zero_grad()
@@ -81,13 +74,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                 optimizer.step()
             losses.append(loss.item())
-            rev_losses.append(rev_loss.item())
-            clean_losses.append(clean_loss.item())
-            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses), 'clean_loss': np.mean(clean_losses)}
+            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
 
             if mode == 'val':
-                mix = rev_sep.sum(1)
-                mixcat = torch.stack([mix, mix], 1)
+                mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
                 input_score = - metric(mixcat, clean_sep)
                 output_score = - metric(logits, clean_sep)
                 score = output_score - input_score
@@ -100,8 +90,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             pbar.set_postfix(progress_bar_dict)
             
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
-    writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
@@ -118,8 +106,8 @@ def get_model(config):
         model = ConvTasNet(msk_activate='relu', msk_num_layers=5)
     elif config.model == 'v2':
         model = ConvTasNet_v2(reverse='reverse' in config.name)
-    elif config.model == 'v3':
-        model = ConvTasNet_v3(reverse='reverse' in config.name)
+    # elif config.model == 'v3':
+    #     model = ConvTasNet_v3(reverse='reverse' in config.name)
     elif config.model == 'tas':
         model = TasNet()
     elif config.model == 'dprnn':
