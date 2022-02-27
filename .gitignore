@@ -6,3 +6,4 @@
 /mir_eval/
 /.ipynb_checkpoints/
 /sample/
+/**/*.ipynb
