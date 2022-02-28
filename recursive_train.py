@@ -26,12 +26,17 @@ from models import *
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
-    losses = []
-    rev_losses = []
-    clean_losses = []
-    scores = []
-    input_scores = []
-    output_scores = []
+    scores = {}
+    losses = {}
+    input_scores = {}
+    output_scores = {}
+    iternum = config.iternum
+    for i in range(iternum):
+        losses[f'loss{i}'] = []
+        input_scores[i] = []
+        output_scores[i] = []
+        scores[i] = []
+
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             if config.model in no_distance_models:
@@ -42,99 +47,68 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
             mix = rev_sep.sum(1)
-            cleanmix = clean_sep.sum(1)
+            
+            input_score = - metric(mix.unsqueeze(1).repeat((1,2,1)), clean_sep).item()
 
-            if config.norm:
+            mix_std = mix.std(-1, keepdim=True)
+            mix_mean = mix.mean(-1, keepdim=True)
+            mix = (mix - mix_mean) / mix_std
+
+            for i in range(iternum):
+                logits = model(mix)
+                logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+                loss = criterion(logits, clean_sep)
+                if mode == 'train':
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                    optimizer.step()
+
+                loss = loss.item()
+                losses[f'loss{i}'].append(loss)
+
+                output_score = - loss
+                input_scores[i].append((input_score))
+                output_scores[i].append((output_score))
+                scores[i].append((output_score - input_score))
+
+                del mix
+                mix = logits.clone().detach().sum(1)
                 mix_std = mix.std(-1, keepdim=True)
                 mix_mean = mix.mean(-1, keepdim=True)
-                clean_std = cleanmix.std(-1, keepdim=True)
-                clean_mean = cleanmix.mean(-1, keepdim=True)
                 mix = (mix - mix_mean) / mix_std
-                cleanmix = (cleanmix - clean_mean) / clean_std
-                mix_std = mix_std.unsqueeze(1)
-                mix_mean = mix_mean.unsqueeze(1)
-                clean_std = clean_std.unsqueeze(1)
-                clean_mean = clean_mean.unsqueeze(1)
-            
-            clean_logits = None
-            if config.model in no_distance_models:
-                logits = model(mix)
-                logits = logits * mix_std + mix_mean
 
-                cleaninp = logits.sum(1)
-                clean_std = cleaninp.std(-1, keepdim=True)
-                clean_mean = cleaninp.mean(-1, keepdim=True)
-                clean_logits = model((cleaninp - clean_mean) / clean_std)
-                clean_logits = clean_logits * clean_std.unsqueeze(1) + clean_mean.unsqueeze(1)
-            else:
-                logits = model(mix, distance=distance)
-            if config.norm:
-                logits = logits * mix_std + mix_mean
-            rev_loss = criterion(logits, clean_sep)
-            if clean_logits is not None:
-                # clean_loss = criterion(clean_logits, clean_sep) * min(epoch / 50., 1)
-                clean_loss = criterion(clean_logits, clean_sep)
-            
-            if torch.isnan(rev_loss).sum() != 0:
+            if np.isnan(losses['loss0'][-1]):
                 print('nan is detected')
                 exit()
 
-            loss = rev_loss
-            if clean_logits is not None:
-                loss += clean_loss
-                rev_losses.append(rev_loss.item())
-                clean_losses.append(clean_loss.item())
-
-            if mode == 'train':
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
-                optimizer.step()
-            losses.append(loss.item())
-            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
-            if len(rev_losses) != 0:
-                progress_bar_dict['rev_loss'] = np.mean(rev_losses)
-            if len(clean_losses) != 0:
-                progress_bar_dict['clean_loss'] = np.mean(clean_losses)
-
-            if mode == 'val':
-                mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
-                input_score = - metric(mixcat, clean_sep)
-                output_score = - metric(logits, clean_sep)
-                score = output_score - input_score
-                scores.append(score.tolist())
-                input_scores.append(input_score.tolist())
-                output_scores.append(output_score.tolist())
-                progress_bar_dict['input_score'] = np.mean(input_scores)
-                progress_bar_dict['output_score'] = np.mean(output_scores)
-                progress_bar_dict['score'] = np.mean(scores)
-            pbar.set_postfix(progress_bar_dict)
+            progress_bar_dict = {'mode': mode}
             
-    writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
-    if len(rev_losses) != 0:
-        writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    if len(clean_losses) != 0:
-        writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
+            for i in range(iternum):
+                progress_bar_dict[f'loss{i}'] = np.mean(losses[f'loss{i}'])
+                progress_bar_dict[f'score{i}'] = np.mean(scores[i])
+            pbar.set_postfix(progress_bar_dict)
+    
+    for i in range(iternum):
+        writer.add_scalar(f'{mode}/loss{i}', np.mean(losses[f'loss{i}']), epoch)
+        writer.add_scalar(f'{mode}/scores{i}', np.mean(scores[i]), epoch)
+        writer.add_scalar(f'{mode}/scores', np.mean(losses[i]), epoch)
+    
     if mode == 'train':
         return np.mean(losses)
     else:
         writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
         writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
         writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
-        return np.mean(losses), np.mean(scores)
+        return np.mean(losses), np.mean(scores[len(scores) - 1])
 
 
 def get_model(config):
     if config.model == '':
         model = ConvTasNet(msk_activate='relu')
-        pretrain = torch.load('/root/contrative_degree/save/reverb_baseline_24_rir_norm_sisdr/best.pt')['model']
-        model.load_state_dict(pretrain)
-    elif config.model == 'v1':
-        model = ConvTasNet(msk_activate='relu', msk_num_layers=5)
-    elif config.model == 'v2':
-        model = ConvTasNet_v2(reverse='reverse' in config.name)
-    # elif config.model == 'v3':
-    #     model = ConvTasNet_v3(reverse='reverse' in config.name)
+        if config.pretrain:
+            pretrain = torch.load('/root/contrative_degree/save/reverb_baseline_24_rir_norm_sisdr/best.pt')['model']
+            model.load_state_dict(pretrain)
     elif config.model == 'tas':
         model = TasNet()
     elif config.model == 'dprnn':
@@ -145,7 +119,7 @@ def get_model(config):
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     name = 'reverb_' + (config.model if config.model is not '' else 'baseline')
-    name += f'_{config.batch}'
+    name += f'_{config.batch}_iter{config.iternum}'
     if config.model != '' and config.task == '':
         raise ArgumentError('clean separation model should be baseline model')
     if 'rir' not in config.task:
@@ -157,7 +131,8 @@ def main(config):
     if config.norm:
         name += '_norm'
     config.name = name + '_' + config.name if config.name is not '' else ''
-    config.name += '_pretrain'
+    if config.pretrain:
+        config.name += '_pretrain'
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
     savepath = os.path.join('save', config.name)
@@ -223,13 +198,8 @@ def main(config):
     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    def mseloss():
-        def _mseloss(logit, answer):
-            return MSELoss(reduction='none')(logit, answer)
-        return _mseloss
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    if 'mse' in config.name:
-        criterion = MSELoss()
+
     
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
@@ -305,4 +275,9 @@ def main(config):
     
 
 if __name__ == '__main__':
-    main(get_args())
+    import argparse
+    args = argparse.ArgumentParser()
+    args.add_argument('--iternum', type=int, default=3)
+    args.add_argument('--pretrain', action='store_true')
+    main(get_args(args))
+
