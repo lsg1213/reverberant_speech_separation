@@ -49,12 +49,22 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             mix = rev_sep.sum(1)
             
             input_score = - metric(mix.unsqueeze(1).repeat((1,2,1)), clean_sep).item()
-
-            mix_std = mix.std(-1, keepdim=True)
-            mix_mean = mix.mean(-1, keepdim=True)
-            mix = (mix - mix_mean) / mix_std
-
+            
+            if config.residual:
+                inputs = []
             for i in range(iternum):
+                if config.residual:
+                    inputs.append(mix)
+                    mix = torch.stack(inputs).mean(0)
+                    mix_std = mix.std(-1, keepdim=True)
+                    mix_std = torch.maximum(mix_std, torch.tensor(1e-6, dtype=mix.dtype, device=mix.device))
+                    mix_mean = mix.mean(-1, keepdim=True)
+                    mix = (mix - mix_mean) / mix_std
+                else:
+                    mix_std = mix.std(-1, keepdim=True)
+                    mix_std = torch.maximum(mix_std, torch.tensor(1e-6, dtype=mix.dtype, device=mix.device))
+                    mix_mean = mix.mean(-1, keepdim=True)
+                    mix = (mix - mix_mean) / mix_std
                 logits = model(mix)
                 logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
                 loss = criterion(logits, clean_sep)
@@ -72,11 +82,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 output_scores[i].append((output_score))
                 scores[i].append((output_score - input_score))
 
-                del mix
                 mix = logits.clone().detach().sum(1)
-                mix_std = mix.std(-1, keepdim=True)
-                mix_mean = mix.mean(-1, keepdim=True)
-                mix = (mix - mix_mean) / mix_std
 
             if np.isnan(losses['loss0'][-1]):
                 print('nan is detected')
@@ -110,6 +116,9 @@ def get_model(config):
             model.load_state_dict(pretrain)
     elif config.model == 'tas':
         model = TasNet()
+        if config.pretrain:
+            pretrain = torch.load('/root/contrative_degree/save/reverb_tas_24_rir_norm_sisdr/best.pt')['model']
+            model.load_state_dict(pretrain)
     elif config.model == 'dprnn':
         model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
         if config.pretrain:
@@ -135,6 +144,8 @@ def main(config):
     config.name = name + '_' + config.name if config.name is not '' else ''
     if config.pretrain:
         config.name += '_pretrain'
+    if config.residual:
+        config.name += '_residual'
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
     savepath = os.path.join('save', config.name)
@@ -281,5 +292,6 @@ if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument('--iternum', type=int, default=3)
     args.add_argument('--pretrain', action='store_true')
+    args.add_argument('--residual', action='store_true')
     main(get_args(args))
 
