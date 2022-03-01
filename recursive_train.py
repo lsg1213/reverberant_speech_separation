@@ -92,15 +92,14 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     for i in range(iternum):
         writer.add_scalar(f'{mode}/loss{i}', np.mean(losses[f'loss{i}']), epoch)
         writer.add_scalar(f'{mode}/scores{i}', np.mean(scores[i]), epoch)
-        writer.add_scalar(f'{mode}/scores', np.mean(losses[i]), epoch)
     
     if mode == 'train':
-        return np.mean(losses)
+        return np.mean(losses[f'loss{config.iternum - 1}'])
     else:
-        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores), epoch)
-        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores), epoch)
-        writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores), epoch)
-        return np.mean(losses), np.mean(scores[len(scores) - 1])
+        writer.add_scalar(f'{mode}/SI-SNRI', np.mean(scores[config.iternum - 1]), epoch)
+        writer.add_scalar(f'{mode}/input_SI-SNR', np.mean(input_scores[config.iternum - 1]), epoch)
+        writer.add_scalar(f'{mode}/output_SI-SNR', np.mean(output_scores[config.iternum - 1]), epoch)
+        return np.mean(losses[f'loss{config.iternum - 1}']), np.mean(scores[config.iternum - 1])
 
 
 def get_model(config):
@@ -113,6 +112,9 @@ def get_model(config):
         model = TasNet()
     elif config.model == 'dprnn':
         model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+        if config.pretrain:
+            pretrain = torch.load('/root/contrative_degree/save/reverb_dprnn_24_rir_norm_sisdr/best.pt')['model']
+            model.load_state_dict(pretrain)
     return model
 
 
@@ -189,7 +191,7 @@ def main(config):
     model = get_model(config)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.1 if config.pretrain else 0.5, patience=2 if config.pretrain else 3, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
@@ -227,7 +229,7 @@ def main(config):
 
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
 
-        scheduler.step(val_loss)
+        scheduler.step(val_score)
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':

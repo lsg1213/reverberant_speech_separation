@@ -54,18 +54,28 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     mix = (mix - mix_mean) / mix_std
-                    mix_std = mix_std.unsqueeze(1)
-                    mix_mean = mix_mean.unsqueeze(1)
 
                 if config.model in ('', 'tas', 'dprnn') or 'test' in config.model:
-                    logits = model(mix)
+                    iternum = vars(config).get('iternum')
+                    if iternum is None:
+                        logits = model(mix)
+                        logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+                    else:
+                        for i in range(iternum):
+                            logits = model(mix)
+                            logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+
+                            mix = logits.clone().detach().sum(1)
+                            mix_std = mix.std(-1, keepdim=True)
+                            mix_mean = mix.mean(-1, keepdim=True)
+                            mix = (mix - mix_mean) / mix_std
+                        mix = mix * mix_std + mix_mean
                 elif config.model in no_distance_models:
                     logits = model(mix, test=True)
+                    logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
                 else:
                     logits = model(mix, distance=distance, t60=t60, test=True)
-
-                if config.norm:
-                    logits = logits * mix_std + mix_mean
+                    logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
 
                 si_snr = criterion(logits, clean_sep, return_est=True if 'rir' not in dataset.task else False)
                 input_si_snr = criterion(mixcat, clean_sep)
