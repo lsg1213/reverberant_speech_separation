@@ -791,7 +791,7 @@ class T60_v2_ConvBlock(T60_ConvBlock):
 
         alpha = F.softplus(self.fc2_1(t60.unsqueeze(-1)))
         beta = self.fc2_2(t60.unsqueeze(-1))
-        feature = alpha.unsqueeze(-1) * F.conv1d(input, self.conv2_weight, self.conv2_bias, padding=self.padding, dilation=self.dilation, groups=feature.shape[1]) + beta.unsqueeze(-1)
+        feature = alpha.unsqueeze(-1) * F.conv1d(feature, self.conv2_weight, self.conv2_bias, padding=self.padding, dilation=self.dilation, groups=feature.shape[1]) + beta.unsqueeze(-1)
         feature = self.prelu(feature)
         feature = self.gnorm2(feature)
         
