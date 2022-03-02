@@ -55,19 +55,17 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
             mix = rev_sep.sum(1)
-            cleanmix = clean_sep.sum(1)
+            if config.test:
+                mixcat = mix.unsqueeze(1)
+            else:
+                mixcat = torch.stack([mix, mix], 1)
 
             if config.norm:
                 mix_std = mix.std(-1, keepdim=True)
                 mix_mean = mix.mean(-1, keepdim=True)
-                clean_std = cleanmix.std(-1, keepdim=True)
-                clean_mean = cleanmix.mean(-1, keepdim=True)
                 mix = (mix - mix_mean) / mix_std
-                cleanmix = (cleanmix - clean_mean) / clean_std
                 mix_std = mix_std.unsqueeze(1)
                 mix_mean = mix_mean.unsqueeze(1)
-                clean_std = clean_std.unsqueeze(1)
-                clean_mean = clean_mean.unsqueeze(1)
             logits = model(mix, t60=t60)
             # clean_logits = model(cleanmix, t60=t60)
             
@@ -106,10 +104,6 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             progress_bar_dict['mse_score'] = np.mean(mses)
 
             output_score = - metric(logits, clean_sep).squeeze()
-            if config.test:
-                mixcat = mix.unsqueeze(1)
-            else:
-                mixcat = torch.stack([mix, mix], 1)
             input_score = - metric(mixcat, clean_sep).squeeze()
             if isinstance(output_score.tolist(), float):
                 output_score = output_score.unsqueeze(0)

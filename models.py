@@ -491,11 +491,80 @@ class Dereverb_T60_module(torch.nn.Module):
         return torch.stack(out)
 
 
+class T60_ConvBlock(torch.nn.Module):
+    def __init__(
+        self,
+        io_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        padding: int,
+        dilation: int = 1,
+        no_residual: bool = False,
+    ):
+        super().__init__()
+        self.padding=padding
+        self.dilation=dilation
+        
+        self.prelu = torch.nn.PReLU()
+        # self.conv1_weight = torch.nn.Parameter(torch.nn.Conv1d(in_channels=io_channels, out_channels=hidden_channels, kernel_size=1).weight)
+        # self.conv1_bias = torch.nn.Parameter(torch.nn.Conv1d(in_channels=io_channels, out_channels=hidden_channels, kernel_size=1).bias)
+        # self.gnorm1 = torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08)
+
+        # self.conv2_weight = torch.nn.Parameter(torch.nn.Conv1d(in_channels=hidden_channels, out_channels=hidden_channels, kernel_size=kernel_size, padding=padding, dilation=dilation, groups=hidden_channels).weight)
+        # self.conv2_bias = torch.nn.Parameter(torch.nn.Conv1d(in_channels=hidden_channels, out_channels=hidden_channels, kernel_size=kernel_size, padding=padding, dilation=dilation, groups=hidden_channels).bias)
+        # self.gnorm2 = torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08)
+
+        self.fc1_1 = torch.nn.Linear(1, hidden_channels)
+        self.fc1_2 = torch.nn.Linear(1, hidden_channels)
+        self.convs = torch.nn.Sequential(
+            torch.nn.Conv1d(
+                in_channels=io_channels, out_channels=hidden_channels, kernel_size=1
+            ),
+            torch.nn.PReLU(),
+            torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08),
+            torch.nn.Conv1d(
+                in_channels=hidden_channels,
+                out_channels=hidden_channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                dilation=dilation,
+                groups=hidden_channels,
+            ),
+        )
+        self.gnorm = torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08)
+
+        self.res_out = (
+            None
+            if no_residual
+            else torch.nn.Conv1d(
+                in_channels=hidden_channels, out_channels=io_channels, kernel_size=1
+            )
+        )
+        self.skip_out = torch.nn.Conv1d(
+            in_channels=hidden_channels, out_channels=io_channels, kernel_size=1
+        )
+
+    def forward(
+        self, input: torch.Tensor, t60
+    ):
+        out = self.convs(input)
+        alpha = F.softplus(self.fc1_1(t60.unsqueeze(-1)))
+        beta = self.fc1_2(t60.unsqueeze(-1))
+        feature = alpha.unsqueeze(-1) * out + beta.unsqueeze(-1)
+        feature = self.prelu(feature)
+        feature = self.gnorm(feature)
+        if self.res_out is None:
+            residual = None
+        else:
+            residual = self.res_out(feature)
+        skip_out = self.skip_out(feature)
+        return residual, skip_out
+
+
 class T60_MaskGenerator(torch.nn.Module):
     def __init__(
         self,
         input_dim: int,
-        output_dim: int,
         num_sources: int,
         kernel_size: int,
         num_feats: int,
@@ -507,11 +576,10 @@ class T60_MaskGenerator(torch.nn.Module):
         super().__init__()
 
         self.input_dim = input_dim
-        self.output_dim = output_dim
         self.num_sources = num_sources
 
         self.input_norm = torch.nn.GroupNorm(
-            num_groups=1, num_channels=output_dim, eps=1e-8
+            num_groups=1, num_channels=input_dim, eps=1e-8
         )
         self.input_conv = torch.nn.Conv1d(
             in_channels=input_dim, out_channels=num_feats, kernel_size=1
@@ -523,7 +591,7 @@ class T60_MaskGenerator(torch.nn.Module):
             for l in range(num_layers):
                 multi = 2 ** l
                 self.conv_layers.append(
-                    ConvBlock(
+                    T60_ConvBlock(
                         io_channels=num_feats,
                         hidden_channels=num_hidden,
                         kernel_size=kernel_size,
@@ -538,7 +606,7 @@ class T60_MaskGenerator(torch.nn.Module):
                 )
         self.output_prelu = torch.nn.PReLU()
         self.output_conv = torch.nn.Conv1d(
-            in_channels=num_feats, out_channels=output_dim * num_sources, kernel_size=1,
+            in_channels=num_feats, out_channels=input_dim * num_sources, kernel_size=1,
         )
         if msk_activate == "sigmoid":
             self.mask_activate = torch.nn.Sigmoid()
@@ -560,20 +628,17 @@ class T60_MaskGenerator(torch.nn.Module):
 
         batch_size = input.shape[0]
         feats = self.input_norm(input)
-        if t60 is not None:
-            t60 = t60.unsqueeze(-1).unsqueeze(-1).repeat(1,1,feats.shape[-1])
-            feats = torch.cat([feats, t60], 1)
         feats = self.input_conv(feats)
         output = 0.0
         for layer in self.conv_layers:
-            residual, skip = layer(feats)
+            residual, skip = layer(feats, t60=t60)
             if residual is not None:  # the last conv layer does not produce residual
                 feats = feats + residual
             output = output + skip
         output = self.output_prelu(output)
         output = self.output_conv(output)
         output = self.mask_activate(output)
-        return output.view(batch_size, self.num_sources, self.output_dim, -1)
+        return output.view(batch_size, self.num_sources, self.input_dim, -1)
 
 
 class Dereverb_T60_encoder(torch.nn.Module):
@@ -640,17 +705,8 @@ class T60_ConvTasNet_v1(ConvTasNet):
         self.enc_num_feats = enc_num_feats
         self.enc_kernel_size = enc_kernel_size
         self.enc_stride = enc_kernel_size // 2
-
-        self.encoder = Dereverb_T60_encoder(
-            in_channels=1,
-            out_channels=enc_num_feats,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
-        )
         
-        self.mask_generator = conv_tasnet.MaskGenerator(
+        self.mask_generator = T60_MaskGenerator(
             input_dim=enc_num_feats,
             num_sources=num_sources,
             kernel_size=msk_kernel_size,
@@ -659,18 +715,6 @@ class T60_ConvTasNet_v1(ConvTasNet):
             num_layers=msk_num_layers,
             num_stacks=msk_num_stacks,
             msk_activate=msk_activate,
-        )
-
-        # 8000(sampling rate) * 0.5(T60 maximum value) / 8(encoded feature resolution)
-        # self.dereverb_module = Dereverb_T60_module(config, enc_num_feats, msk_num_feats, strides=128)
-
-        self.decoder = Dereverb_T60_decoder(
-            in_channels=enc_num_feats,
-            out_channels=1,
-            kernel_size=enc_kernel_size,
-            stride=self.enc_stride,
-            padding=self.enc_stride,
-            bias=False,
         )
 
     def forward(self, input: torch.Tensor, test=False, **kwargs) -> torch.Tensor:
@@ -688,35 +732,22 @@ class T60_ConvTasNet_v1(ConvTasNet):
                 f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
             )
 
-        # B: batch size
-        # L: input frame length
-        # L': padded input frame length
-        # F: feature dimension
-        # M: feature frame length
-        # S: number of sources
-
         t60 = kwargs.get('t60')
         # clean_sep = kwargs.get('clean')
 
         padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
         batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
-        feats = self.encoder(padded, t60)  # B, F, M
-        # if clean_sep is not None:
-        #     clean_padded, _ = self._align_num_frames_with_strides(clean_sep)
-        #     clean_padded = clean_padded.view(
-        #         batch_size * self.num_sources, -1 ,clean_padded.shape[-1]
-        #     )
-        #     clean_sep = self.encoder(clean_padded)
+        feats = self.encoder(padded)  # B, F, M
 
         # separation module
-        mask = self.mask_generator(feats)
+        mask = self.mask_generator(feats, t60=t60)
         
         masked_feature = mask * feats.unsqueeze(1)  # B, S, F, M
         
         masked = masked_feature.view(
             batch_size * self.num_sources, self.enc_num_feats, -1
         )  # B*S, F, M
-        output = self.decoder(masked, t60)
+        output = self.decoder(masked)
         output = output.view(
             batch_size, self.num_sources, num_padded_frames
         )  # B, S, L'
@@ -724,6 +755,92 @@ class T60_ConvTasNet_v1(ConvTasNet):
         if num_pads > 0:
             output = output[..., :-num_pads]
         return output
+
+
+class T60_v2_ConvBlock(T60_ConvBlock):
+    def __init__(self, io_channels: int, hidden_channels: int, kernel_size: int, padding: int, dilation: int = 1, no_residual: bool = False):
+        super(T60_v2_ConvBlock, self).__init__(io_channels, hidden_channels, kernel_size, padding, dilation, no_residual)
+        self.fc1_1 = torch.nn.Linear(1, hidden_channels)
+        self.fc1_2 = torch.nn.Linear(1, hidden_channels)
+
+        conv = torch.nn.Conv1d(in_channels=io_channels, out_channels=hidden_channels, kernel_size=1)
+        self.conv1_weight = conv.weight
+        self.conv1_bias = conv.bias
+        self.gnorm1 = torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08)
+        self.fc1_1 = torch.nn.Linear(1, hidden_channels)
+        self.fc1_2 = torch.nn.Linear(1, hidden_channels)
+
+        conv = torch.nn.Conv1d(in_channels=hidden_channels, out_channels=hidden_channels, kernel_size=kernel_size, padding=padding, dilation=dilation, groups=hidden_channels)
+        self.conv2_weight = conv.weight
+        self.conv2_bias = conv.bias
+        self.gnorm2 = torch.nn.GroupNorm(num_groups=1, num_channels=hidden_channels, eps=1e-08)
+        self.fc2_1 = torch.nn.Linear(1, hidden_channels)
+        self.fc2_2 = torch.nn.Linear(1, hidden_channels)
+        self.padding = padding
+        self.dilation = dilation
+
+
+    def forward(
+        self, input: torch.Tensor, t60
+    ):
+        alpha = F.softplus(self.fc1_1(t60.unsqueeze(-1)))
+        beta = self.fc1_2(t60.unsqueeze(-1))
+        feature = alpha.unsqueeze(-1) * F.conv1d(input, self.conv1_weight, self.conv1_bias) + beta.unsqueeze(-1)
+        feature = self.prelu(feature)
+        feature = self.gnorm1(feature)
+
+        alpha = F.softplus(self.fc2_1(t60.unsqueeze(-1)))
+        beta = self.fc2_2(t60.unsqueeze(-1))
+        feature = alpha.unsqueeze(-1) * F.conv1d(input, self.conv2_weight, self.conv2_bias, padding=self.padding, dilation=self.dilation, groups=feature.shape[1]) + beta.unsqueeze(-1)
+        feature = self.prelu(feature)
+        feature = self.gnorm2(feature)
+        
+        if self.res_out is None:
+            residual = None
+        else:
+            residual = self.res_out(feature)
+        skip_out = self.skip_out(feature)
+        return residual, skip_out
+
+
+class T60_v2_MaskGenerator(T60_MaskGenerator):
+    def __init__(self, input_dim: int, num_sources: int, kernel_size: int, num_feats: int, num_hidden: int, num_layers: int, num_stacks: int, msk_activate: str):
+        super(T60_v2_MaskGenerator, self).__init__(input_dim, num_sources, kernel_size, num_feats, num_hidden, num_layers, num_stacks, msk_activate)
+
+        self.receptive_field = 0
+        self.conv_layers = torch.nn.ModuleList([])
+        for s in range(num_stacks):
+            for l in range(num_layers):
+                multi = 2 ** l
+                self.conv_layers.append(
+                    T60_v2_ConvBlock(
+                        io_channels=num_feats,
+                        hidden_channels=num_hidden,
+                        kernel_size=kernel_size,
+                        dilation=multi,
+                        padding=multi,
+                        # The last ConvBlock does not need residual
+                        no_residual=(l == (num_layers - 1) and s == (num_stacks - 1)),
+                    )
+                )
+                self.receptive_field += (
+                    kernel_size if s == 0 and l == 0 else (kernel_size - 1) * multi
+                )
+
+
+class T60_ConvTasNet_v2(T60_ConvTasNet_v1):
+    def __init__(self, config, num_sources: int = 2, enc_kernel_size: int = 16, enc_num_feats: int = 512, msk_kernel_size: int = 3, msk_num_feats: int = 128, msk_num_hidden_feats: int = 512, msk_num_layers: int = 8, msk_num_stacks: int = 3, msk_activate: str = "sigmoid"):
+        super(T60_ConvTasNet_v2, self).__init__(config, num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+        self.mask_generator = T60_v2_MaskGenerator(
+            input_dim=enc_num_feats,
+            num_sources=num_sources,
+            kernel_size=msk_kernel_size,
+            num_feats=msk_num_feats,
+            num_hidden=msk_num_hidden_feats,
+            num_layers=msk_num_layers,
+            num_stacks=msk_num_stacks,
+            msk_activate=msk_activate,
+        )
 
     
 class Dereverb_test_v1(ConvTasNet):
