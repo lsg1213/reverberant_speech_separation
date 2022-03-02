@@ -56,16 +56,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 if config.residual:
                     inputs.append(mix)
                     mix = torch.stack(inputs).mean(0)
-                    mix_std = mix.std(-1, keepdim=True)
-                    mix_std = torch.maximum(mix_std, torch.tensor(1e-6, dtype=mix.dtype, device=mix.device))
-                    mix_mean = mix.mean(-1, keepdim=True)
-                    mix = (mix - mix_mean) / mix_std
-                else:
-                    mix_std = mix.std(-1, keepdim=True)
-                    mix_std = torch.maximum(mix_std, torch.tensor(1e-6, dtype=mix.dtype, device=mix.device))
-                    mix_mean = mix.mean(-1, keepdim=True)
-                    mix = (mix - mix_mean) / mix_std
-                logits = model(mix)
+                mix_std = mix.std(-1, keepdim=True)
+                mix_std = torch.maximum(mix_std, torch.tensor(1e-6, dtype=mix.dtype, device=mix.device))
+                mix_mean = mix.mean(-1, keepdim=True)
+                logits = model((mix - mix_mean) / mix_std)
                 logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
                 loss = criterion(logits, clean_sep)
                 if mode == 'train':
