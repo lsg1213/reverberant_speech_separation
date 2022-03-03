@@ -1,8 +1,10 @@
 from math import ceil
+from turtle import forward
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+import torchaudio
 from torchaudio.models.conv_tasnet import ConvBlock, ConvTasNet
 import torchaudio.models.conv_tasnet as conv_tasnet
 from asteroid.models import DPRNNTasNet
@@ -841,6 +843,60 @@ class T60_ConvTasNet_v2(T60_ConvTasNet_v1):
             num_stacks=msk_num_stacks,
             msk_activate=msk_activate,
         )
+
+
+
+
+class T60_ConvTasNet_v3(T60_ConvTasNet_v1):
+    def __init__(self, config, num_sources: int = 2, enc_kernel_size: int = 16, enc_num_feats: int = 512, msk_kernel_size: int = 3, msk_num_feats: int = 128, msk_num_hidden_feats: int = 512, msk_num_layers: int = 8, msk_num_stacks: int = 3, msk_activate: str = "sigmoid"):
+        super(T60_ConvTasNet_v3, self).__init__(config, num_sources, enc_kernel_size, enc_num_feats, msk_kernel_size, msk_num_feats, msk_num_hidden_feats, msk_num_layers, msk_num_stacks, msk_activate)
+        self.mask_generator = torchaudio.models.conv_tasnet.MaskGenerator(
+            input_dim=enc_num_feats,
+            num_sources=num_sources,
+            kernel_size=msk_kernel_size,
+            num_feats=msk_num_feats,
+            num_hidden=msk_num_hidden_feats,
+            num_layers=msk_num_layers,
+            num_stacks=msk_num_stacks,
+            msk_activate=msk_activate,
+        )
+
+        self.encoder_fc1 = torch.nn.Linear(1, enc_num_feats)
+        self.encoder_fc2 = torch.nn.Linear(1, enc_num_feats)
+
+    def forward(self, input: torch.Tensor, test=False, **kwargs) -> torch.Tensor:
+        input = input.unsqueeze(1)
+        if input.ndim != 3 or input.shape[1] != 1:
+            raise ValueError(
+                f"Expected 3D tensor (batch, channel==1, frames). Found: {input.shape}"
+            )
+
+        t60 = kwargs.get('t60')
+
+        padded, num_pads = self._align_num_frames_with_strides(input)  # B, 1, L'
+        batch_size, num_padded_frames = padded.shape[0], padded.shape[2]
+
+        alpha = F.softplus(self.encoder_fc1(t60.unsqueeze(-1)))
+        beta = self.encoder_fc2(t60.unsqueeze(-1))
+        feats = alpha.unsqueeze(-1) * self.encoder(padded) + beta.unsqueeze(-1)  # B, F, M
+
+        # separation module
+        mask = self.mask_generator(feats)
+        
+        masked_feature = mask * feats.unsqueeze(1)  # B, S, F, M
+        
+        masked = masked_feature.view(
+            batch_size * self.num_sources, self.enc_num_feats, -1
+        )  # B*S, F, M
+
+        output = self.decoder(masked)
+        output = output.view(
+            batch_size, self.num_sources, num_padded_frames
+        )  # B, S, L'
+
+        if num_pads > 0:
+            output = output[..., :-num_pads]
+        return output
 
     
 class Dereverb_test_v1(ConvTasNet):
