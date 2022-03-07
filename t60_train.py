@@ -30,6 +30,55 @@ from evals import evaluate
 from torchaudio.models import ConvTasNet
 from models import ConvBlock
 import models
+import joblib
+
+
+class newPITLossWrapper(PITLossWrapper):
+    def __init__(self, loss_func, pit_from="pw_mtx", perm_reduce=None, reduction=True):
+        super(newPITLossWrapper, self).__init__(loss_func, pit_from, perm_reduce)
+        self.reduction = reduction
+
+    def forward(self, est_targets, targets, return_est=False, reduce_kwargs=None, **kwargs):
+        n_src = targets.shape[1]
+        assert n_src < 10, f"Expected source axis along dim 1, found {n_src}"
+        if self.pit_from == "pw_mtx":
+            # Loss function already returns pairwise losses
+            pw_losses = self.loss_func(est_targets, targets, **kwargs)
+        elif self.pit_from == "pw_pt":
+            # Compute pairwise losses with a for loop.
+            pw_losses = self.get_pw_losses(self.loss_func, est_targets, targets, **kwargs)
+        elif self.pit_from == "perm_avg":
+            # Cannot get pairwise losses from this type of loss.
+            # Find best permutation directly.
+            min_loss, batch_indices = self.best_perm_from_perm_avg_loss(
+                self.loss_func, est_targets, targets, **kwargs
+            )
+            # Take the mean over the batch
+            mean_loss = torch.mean(min_loss)
+            if not return_est:
+                return mean_loss
+            reordered = self.reorder_source(est_targets, batch_indices)
+            return mean_loss, reordered
+        else:
+            return
+
+        assert pw_losses.ndim == 3, (
+            "Something went wrong with the loss " "function, please read the docs."
+        )
+        assert pw_losses.shape[0] == targets.shape[0], "PIT loss needs same batch dim as input"
+
+        reduce_kwargs = reduce_kwargs if reduce_kwargs is not None else dict()
+        min_loss, batch_indices = self.find_best_perm(
+            pw_losses, perm_reduce=self.perm_reduce, **reduce_kwargs
+        )
+        if self.reduction:
+            mean_loss = torch.mean(min_loss)
+        else:
+            mean_loss = min_loss
+        if not return_est:
+            return mean_loss
+        reordered = self.reorder_source(est_targets, batch_indices)
+        return mean_loss, reordered
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -39,13 +88,21 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     output_scores = []
     input_scores = []
     rev_losses = []
-    clean_losses = []
-    MSE = torch.nn.MSELoss()
-    mses = []
+    if 'lambdaloss1' in config.name:
+        clean_losses = []
+    tmp = {}
+    meanstd = joblib.load('mean_std.joblib')
+    for i in meanstd:
+        if int(i * 10) not in tmp:
+            tmp[int(i * 10)] = {}
+        for j in meanstd[i]:
+            tmp[int(i * 10)][j] = meanstd[i][j].to(device)
+    meanstd = tmp
 
     num = 0
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
+            progress_bar_dict = {}
             if config.model == no_distance_models:
                 mix, clean = inputs
             else:
@@ -54,34 +111,65 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 t60 = t60.to(device)
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
+            cleanmix = clean_sep.sum(1)
             mix = rev_sep.sum(1)
-            if config.test:
-                mixcat = mix.unsqueeze(1)
-            else:
-                mixcat = torch.stack([mix, mix], 1)
 
-            if config.norm:
-                mix_std = mix.std(-1, keepdim=True)
-                mix_mean = mix.mean(-1, keepdim=True)
-                mix = (mix - mix_mean) / mix_std
-                mix_std = mix_std.unsqueeze(1)
-                mix_mean = mix_mean.unsqueeze(1)
-            logits = model(mix, t60=t60)
-            # clean_logits = model(cleanmix, t60=t60)
+            if 'lambda' in config.name:
+                lambda_val = []
+                for i in torch.round(t60 * 10).int().tolist():
+                    lambda_val.append(torch.normal(meanstd[i]['mean'] / 10, meanstd[i]['std']) / 10)
+                lambda_val = torch.e ** torch.stack(lambda_val)
+            else:
+                lambda_val = t60
+
+
+            mix_std = mix.std(-1, keepdim=True)
+            mix_mean = mix.mean(-1, keepdim=True)
+            logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
+            logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
             
-            if config.norm:
-                mix = mix * mix_std.squeeze(-1) + mix_mean.squeeze(-1)
-                logits = logits * mix_std + mix_mean
-                # clean_logits = clean_logits * clean_std + clean_mean
-            rev_loss = criterion(logits, clean_sep)
-            # clean_loss = criterion(clean_logits, clean_sep)
-            clean_loss = torch.zeros_like(rev_loss)
+            if 'lambdaloss1' in config.name:
+                rev_loss = criterion(logits, clean_sep)
+                cleanmix_mean = cleanmix.mean(-1, keepdim=True)
+                cleanmix_std = cleanmix.std(-1, keepdim=True)
+                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=torch.zeros_like(lambda_val)) 
+                clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
+                clean = criterion(clean_logits, clean_sep).mean()
+                clean_losses.append(clean.item())
+                
+                loss = (rev_loss * lambda_val).mean() + clean
+            elif 'lambda' in config.name:
+                rev_loss = criterion(logits, clean_sep)
+                loss = (rev_loss * lambda_val).mean()
+            else:
+                rev_loss = criterion(logits, clean_sep)
+                loss = rev_loss
+
+            if config.recursive:
+                for i in range(1, config.iternum):
+                    mix_std = mix.std(-1, keepdim=True)
+                    mix_mean = mix.mean(-1, keepdim=True)
+                    logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
+                    logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+                    
+                    if 'lambdaloss1' in config.name:
+                        rev_loss = criterion(logits, clean_sep)
+                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=torch.zeros_like(lambda_val)) 
+                        clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
+                        clean = criterion(clean_logits, clean_sep).mean()
+                        clean_losses.append(clean.item())
+                        progress_bar_dict.update({'clean_loss': np.mean(clean_losses)})
+                        loss = (rev_loss * lambda_val).mean() + clean
+                    elif 'lambda' in config.name:
+                        rev_loss = criterion(logits, clean_sep)
+                        loss = (rev_loss * lambda_val).mean()
+                    loss.backward()
+                    mix = logits.clone()
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
             
-            loss = rev_loss + clean_loss
 
             if mode == 'train':
                 optimizer.zero_grad()
@@ -91,18 +179,13 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             losses.append(loss.item())
             if isinstance(rev_loss.tolist(), float):
                 rev_loss = rev_loss.unsqueeze(0)
-            if not config.test and isinstance(clean_loss.tolist(), float):
-                clean_loss = clean_loss.unsqueeze(0)
             rev_losses += rev_loss.tolist()
-            clean_losses += clean_loss.tolist()
-            mse_score = MSE(logits, clean_sep)
-            mses.append(mse_score.item())
 
-            progress_bar_dict = {'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses)}
-            if not config.test:
-                progress_bar_dict['clean_loss'] = np.mean(clean_losses)
-            progress_bar_dict['mse_score'] = np.mean(mses)
+            progress_bar_dict.update({'mode': mode, 'loss': np.mean(losses), 'rev_loss': np.mean(rev_losses)})
+            if len(clean_losses) != 0:
+                progress_bar_dict.update({'clean_loss': np.mean(clean_losses)})
 
+            mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
             output_score = - metric(logits, clean_sep).squeeze()
             input_score = - metric(mixcat, clean_sep).squeeze()
             if isinstance(output_score.tolist(), float):
@@ -131,9 +214,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
     writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    if not config.test:
+    if 'lambdaloss1' in config.name:
         writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
-    writer.add_scalar(f'{mode}/mse_score', np.mean(mses), epoch)
     if mode == 'train':
         return np.mean(losses)
     else:
@@ -147,6 +229,9 @@ def get_model(config):
     splited_name = config.model.split('_')
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
+        if config.recursive:
+            resume = torch.load('save/t60_T60_v1_12_rir_norm_sisdr_lambdaloss1/pretrain.pt')['model']
+            model.load_state_dict(resume)
     elif 'dprnn' in config.model:
         modelname = 'T60_DPRNNTasNet'
         if len(splited_name) > 2:
@@ -184,8 +269,8 @@ def main(config):
         config.task += '_'
     if config.norm:
         name += '_norm'
-    if config.test:
-        name += '_test'
+    if config.recursive:
+        name += f'_recursive_{config.iternum}'
     config.name = name + '_' + config.name if config.name is not '' else ''
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
@@ -242,7 +327,9 @@ def main(config):
     model = get_model(config)
 
     optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=1, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+    if config.recursive:
+        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
         json.dump(vars(config), f)
@@ -251,11 +338,10 @@ def main(config):
     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = PITLossWrapper(pairwise_neg_sisdr)
-    def mseloss():
-        def _mseloss(logit, answer):
-            return MSELoss(reduction='none')(logit, answer)
-        return _mseloss
-    criterion = PITLossWrapper(pairwise_neg_sisdr)
+    if 'lambda' in config.name:
+        criterion = newPITLossWrapper(pairwise_neg_sisdr, reduction=False)
+    else:
+        criterion = PITLossWrapper(pairwise_neg_sisdr)
     if 'mse' in config.name:
         criterion = MSELoss()
     
@@ -285,7 +371,7 @@ def main(config):
 
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
 
-        scheduler.step(val_loss)
+        scheduler.step(val_score)
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
@@ -331,5 +417,7 @@ def main(config):
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument('--test', action='store_true')
+    args.add_argument('--recursive', action='store_true')
     args.add_argument('--t60', type=bool, default=True)
+    args.add_argument('--iternum', type=int, default=2)
     main(get_args(args))
