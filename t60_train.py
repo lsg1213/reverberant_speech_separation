@@ -146,6 +146,12 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 loss = rev_loss
 
             if config.recursive:
+                if mode == 'train':
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                    optimizer.step()
+
                 inputs = []
                 for i in range(1, config.iternum):
                     inputs.append(mix)
@@ -167,18 +173,18 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                         rev_loss = criterion(logits, clean_sep)
                         loss = (rev_loss * lambda_val).mean()
                     loss.backward()
-                    mix = logits.clone()
+                    mix = logits.clone().detach().sum(1)
+            else:
+                if mode == 'train':
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                    optimizer.step()
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
             
-
-            if mode == 'train':
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
-                optimizer.step()
             losses.append(loss.item())
             if isinstance(rev_loss.tolist(), float):
                 rev_loss = rev_loss.unsqueeze(0)
@@ -232,9 +238,6 @@ def get_model(config):
     splited_name = config.model.split('_')
     if config.model == '':
         model = torchaudio.models.ConvTasNet(msk_activate='relu')
-        if config.recursive:
-            resume = torch.load('save/t60_T60_v1_12_rir_norm_sisdr_lambdaloss1/pretrain.pt')['model']
-            model.load_state_dict(resume)
     elif 'dprnn' in config.model:
         modelname = 'T60_DPRNNTasNet'
         if len(splited_name) > 2:
@@ -250,6 +253,9 @@ def get_model(config):
     else:
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
+        if config.recursive:
+            resume = torch.load('save/t60_T60_v1_64_rir_norm_sisdr_lambdaloss1/best.pt')['model']
+            model.load_state_dict(resume)
     return model
 
 
