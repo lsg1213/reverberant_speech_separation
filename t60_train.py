@@ -146,7 +146,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 loss = rev_loss
 
             if config.recursive:
+                inputs = []
                 for i in range(1, config.iternum):
+                    inputs.append(mix)
+                    mix = torch.stack(inputs).mean(0)
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
