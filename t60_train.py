@@ -117,8 +117,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if 'lambda' in config.name:
                 lambda_val = []
                 for i in torch.round(t60 * 10).int().tolist():
-                    lambda_val.append(torch.normal(meanstd[i]['mean'] / 10, meanstd[i]['std']) / 10)
-                lambda_val = torch.e ** torch.stack(lambda_val)
+                    lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
+                lambda_val = torch.e ** (torch.stack(lambda_val) / 10)
             else:
                 lambda_val = t60
 
@@ -132,7 +132,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 rev_loss = criterion(logits, clean_sep)
                 cleanmix_mean = cleanmix.mean(-1, keepdim=True)
                 cleanmix_std = cleanmix.std(-1, keepdim=True)
-                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=torch.zeros_like(lambda_val)) 
+                clean_lambda_val = torch.e ** (- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
+                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
                 clean_losses.append(clean.item())
@@ -163,17 +164,26 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     
                     if 'lambdaloss1' in config.name:
                         rev_loss = criterion(logits, clean_sep)
-                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=torch.zeros_like(lambda_val)) 
+                        clean_lambda_val = torch.e ** (- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
+                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                         clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                         clean = criterion(clean_logits, clean_sep).mean()
                         clean_losses.append(clean.item())
                         progress_bar_dict.update({'clean_loss': np.mean(clean_losses)})
+                        lambda_val = torch.e ** (- criterion(logits.clone().detach().sum(1, keepdim=True).repeat((1,2,1)), clean_sep) / 10.)
                         loss = (rev_loss * lambda_val).mean() + clean
                     elif 'lambda' in config.name:
                         rev_loss = criterion(logits, clean_sep)
                         loss = (rev_loss * lambda_val).mean()
-                    loss.backward()
+                    else:
+                        rev_loss = criterion(logits, clean_sep)
+                        loss = rev_loss
                     mix = logits.clone().detach().sum(1)
+                    if mode == 'train':
+                        optimizer.zero_grad()
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                        optimizer.step()
             else:
                 if mode == 'train':
                     optimizer.zero_grad()
@@ -292,7 +302,7 @@ def main(config):
     final_epoch = 0
     
     train_set = LibriMix(
-        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-100'),
         config=config,
         task=config.task[:-1],
         sample_rate=config.sr,
