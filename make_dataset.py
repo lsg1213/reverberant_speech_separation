@@ -89,7 +89,7 @@ def get_RIR(config):
 
 
 def main(config):
-    modes = ['train-360', 'dev', 'test']
+    modes = ['train-100', 'dev', 'test']
     # modes = ['dev', 'test']
     csvpath = os.path.join(config.datapath, 'metadata')
     
@@ -128,8 +128,8 @@ def main(config):
             rir_function = torch.from_numpy(rir_function.squeeze()).cpu()
             clean_rir_function = torch.from_numpy(clean_rir_function.squeeze()).cpu()
             a_coefficient = F.pad(torch.ones((rir_function.shape[0], 1), device=rir_function.device, dtype=rir_function.dtype), (0, rir_function.shape[-1] - 1))
-            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function, clamp=False) * 4 * np.pi
-            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function, clamp=False) * 4 * np.pi
+            rir_sources = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), rir_function, clamp=False)
+            rir_label = torchaudio.functional.lfilter(sources, torch.tensor(a_coefficient), clean_rir_function, clamp=False)
             
             # rir normalization
             # rir_sources = rir_sources * sources.max(-1, keepdims=True)[0] / rir_sources.max(-1, keepdims=True)[0]

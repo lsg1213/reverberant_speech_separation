@@ -95,7 +95,8 @@ def main(config):
 
     rawsources = read_sources(csv['source_1_path'], csv['source_2_path'])
     out = {}
-    for T60 in [0.1, 0.2, 0.3, 0.4, 0.5]:
+    # for T60 in [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]:
+    for T60 in [0.125]:
         scores = []
         for i in tqdm(range(1000)):
             # with ThreadPoolExecutor() as pool:
@@ -104,7 +105,7 @@ def main(config):
             scores.append(score)
         scores = torch.stack(scores)
         out[T60] = {'mean': scores.mean(), 'std': scores.std()}
-    joblib.dump(out, 'mean_std.joblib')
+    joblib.dump(out, 'mean_std_tmp.joblib')
 
 
 if __name__ == '__main__':

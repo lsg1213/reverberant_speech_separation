@@ -88,15 +88,18 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     output_scores = []
     input_scores = []
     rev_losses = []
-    if 'lambdaloss1' in config.name:
+    if 'lambdaloss' in config.name:
         clean_losses = []
     tmp = {}
-    meanstd = joblib.load('mean_std.joblib')
+    if 'lambdaloss2' in config.name:
+        meanstd = joblib.load('mean_std2.joblib')
+    elif 'lambdaloss1' in config.name:
+        meanstd = joblib.load('mean_std1.joblib')
     for i in meanstd:
-        if int(i * 10) not in tmp:
-            tmp[int(i * 10)] = {}
+        if int(i * 1000) not in tmp:
+            tmp[int(i * 1000)] = {}
         for j in meanstd[i]:
-            tmp[int(i * 10)][j] = meanstd[i][j].to(device)
+            tmp[int(i * 1000)][j] = meanstd[i][j].to(device)
     meanstd = tmp
 
     num = 0
@@ -116,7 +119,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
             if 'lambda' in config.name:
                 lambda_val = []
-                for i in torch.round(t60 * 10).int().tolist():
+                time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
+                for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
                     lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
                 lambda_val = torch.e ** (torch.stack(lambda_val) / 10)
             else:
@@ -128,7 +132,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
             logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
             
-            if 'lambdaloss1' in config.name:
+            if 'lambdaloss' in config.name:
                 rev_loss = criterion(logits, clean_sep)
                 cleanmix_mean = cleanmix.mean(-1, keepdim=True)
                 cleanmix_std = cleanmix.std(-1, keepdim=True)
@@ -141,7 +145,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 loss = (rev_loss * lambda_val).mean() + clean
             elif 'lambda' in config.name:
                 rev_loss = criterion(logits, clean_sep)
-                loss = (rev_loss * lambda_val).mean()
+                loss = (rev_loss).mean()
             else:
                 rev_loss = criterion(logits, clean_sep)
                 loss = rev_loss
@@ -162,7 +166,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
                     logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
                     
-                    if 'lambdaloss1' in config.name:
+                    if 'lambdaloss' in config.name:
                         rev_loss = criterion(logits, clean_sep)
                         clean_lambda_val = torch.e ** (- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
                         clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
@@ -233,7 +237,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
     writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
-    if 'lambdaloss1' in config.name:
+    if 'lambdaloss' in config.name:
         writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
     if mode == 'train':
         return np.mean(losses)
@@ -264,7 +268,7 @@ def get_model(config):
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive:
-            resume = torch.load('save/t60_T60_v1_64_rir_norm_sisdr_lambdaloss1/best.pt')['model']
+            resume = torch.load('save/t60_T60_v1_64_rir_norm_sisdr_lambdaloss2/best.pt')['model']
             model.load_state_dict(resume)
     return model
 

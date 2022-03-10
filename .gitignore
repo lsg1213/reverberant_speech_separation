@@ -7,3 +7,4 @@
 /.ipynb_checkpoints/
 /sample/
 /**/*.ipynb
+/train360_history

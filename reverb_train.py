@@ -22,6 +22,7 @@ from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from models import *
+from t60_train import newPITLossWrapper
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -78,8 +79,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
             if mode == 'val':
                 mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
-                input_score = - metric(mixcat, clean_sep)
-                output_score = - metric(logits, clean_sep)
+                input_score = - metric(mixcat, clean_sep).squeeze()
+                output_score = - metric(logits, clean_sep).squeeze()
                 score = output_score - input_score
                 scores.append(score.tolist())
                 input_scores.append(input_score.tolist())
@@ -142,7 +143,7 @@ def main(config):
     
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
-        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-100'),
         config=config,
         task=config.task + 'sep_clean',
         sample_rate=config.sr,
@@ -194,7 +195,7 @@ def main(config):
     callbacks = []
     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
-    metric = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
+    metric = newPITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx", reduction=False)
     def mseloss():
         def _mseloss(logit, answer):
             return MSELoss(reduction='none')(logit, answer)
