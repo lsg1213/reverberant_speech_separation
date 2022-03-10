@@ -1,9 +1,6 @@
 from argparse import ArgumentError
 import argparse
-from audioop import bias
 import os
-from turtle import forward
-from unicodedata import bidirectional
 from asteroid import DPRNNTasNet
 
 import torchaudio
@@ -22,6 +19,11 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
+import torch
+torch.manual_seed(3000)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(3000)
 
 from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
