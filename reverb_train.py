@@ -28,6 +28,10 @@ from t60_train import newPITLossWrapper
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
+    if 'clean' in config.name:
+        clean_losses = []
+        rev_losses = []
+
     scores = []
     input_scores = []
     output_scores = []
@@ -43,31 +47,25 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             mix = rev_sep.sum(1)
             cleanmix = clean_sep.sum(1)
 
-            if config.norm:
-                mix_std = mix.std(-1, keepdim=True)
-                mix_mean = mix.mean(-1, keepdim=True)
+            mix_std = mix.std(-1, keepdim=True)
+            mix_mean = mix.mean(-1, keepdim=True)
+            logits = model((mix - mix_mean) / mix_std)
+            logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+            rev_loss = criterion(logits, clean_sep)
+
+            if 'clean' in config.name:
                 clean_std = cleanmix.std(-1, keepdim=True)
                 clean_mean = cleanmix.mean(-1, keepdim=True)
-                mix = (mix - mix_mean) / mix_std
-                cleanmix = (cleanmix - clean_mean) / clean_std
-                mix_std = mix_std.unsqueeze(1)
-                mix_mean = mix_mean.unsqueeze(1)
-                clean_std = clean_std.unsqueeze(1)
-                clean_mean = clean_mean.unsqueeze(1)
-
-            if config.model in no_distance_models:
-                logits = model(mix)
+                clean_logits = model((cleanmix - clean_mean) / clean_std)
+                clean_logits = clean_logits * clean_std.unsqueeze(1) + clean_mean.unsqueeze(1)
+                clean_loss = criterion(clean_logits, clean_sep)
+                loss = rev_loss + clean_loss
             else:
-                logits = model(mix, distance=distance)
-            if config.norm:
-                logits = logits * mix_std + mix_mean
-            rev_loss = criterion(logits, clean_sep)
+                loss = rev_loss
             
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
                 exit()
-
-            loss = rev_loss
 
             if mode == 'train':
                 optimizer.zero_grad()
@@ -76,21 +74,30 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 optimizer.step()
             losses.append(loss.item())
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
+            if 'clean' in config.name:
+                rev_losses.append(rev_loss.item())
+                clean_losses.append(clean_loss.item())
+                progress_bar_dict['rev_loss'] = np.mean(rev_losses)
+                progress_bar_dict['clean_loss'] = np.mean(clean_losses)
 
             if mode == 'val':
                 mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
                 input_score = - metric(mixcat, clean_sep).squeeze()
                 output_score = - metric(logits, clean_sep).squeeze()
                 score = output_score - input_score
-                scores.append(score.tolist())
-                input_scores.append(input_score.tolist())
-                output_scores.append(output_score.tolist())
+                scores += score.tolist()
+                input_scores += input_score.tolist()
+                output_scores += output_score.tolist()
                 progress_bar_dict['input_score'] = np.mean(input_scores)
                 progress_bar_dict['output_score'] = np.mean(output_scores)
                 progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
-            
+
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
+    if 'clean' in config.name:
+        writer.add_scalar(f'{mode}/rev_loss', np.mean(rev_losses), epoch)
+        writer.add_scalar(f'{mode}/clean_loss', np.mean(clean_losses), epoch)
+
     if mode == 'train':
         return np.mean(losses)
     else:
@@ -196,13 +203,7 @@ def main(config):
     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = newPITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx", reduction=False)
-    def mseloss():
-        def _mseloss(logit, answer):
-            return MSELoss(reduction='none')(logit, answer)
-        return _mseloss
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    if 'mse' in config.name:
-        criterion = MSELoss()
     
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
