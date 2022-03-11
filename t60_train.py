@@ -90,12 +90,11 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     output_scores = []
     input_scores = []
     rev_losses = []
-    if 'lambdaloss' in config.name:
-        clean_losses = []
+    clean_losses = []
     tmp = {}
-    if 'lambdaloss2' in config.name:
+    if 'lambdaloss2' in config.name or 'lambda2' in config.name:
         meanstd = joblib.load('mean_std2.joblib')
-    elif 'lambdaloss1' in config.name:
+    elif 'lambdaloss1' in config.name or 'lambda1' in config.name:
         meanstd = joblib.load('mean_std1.joblib')
     for i in meanstd:
         if int(i * 1000) not in tmp:
