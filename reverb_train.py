@@ -1,14 +1,15 @@
 from argparse import ArgumentError
 import os
 
-from torch.nn.modules.loss import MSELoss
-
 from args import get_args
 from multiprocessing import cpu_count
 import json
 
 import torch
-import torchaudio
+torch.manual_seed(3000)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(3000)
 import numpy as np
 from tensorboardX import SummaryWriter
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
