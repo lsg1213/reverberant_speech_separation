@@ -6,11 +6,11 @@ from multiprocessing import cpu_count
 import json
 
 import torch
+import numpy as np
 torch.manual_seed(3000)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 np.random.seed(3000)
-import numpy as np
 from tensorboardX import SummaryWriter
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 from torch.utils.data import DataLoader
