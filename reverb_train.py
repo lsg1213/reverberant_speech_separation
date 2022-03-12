@@ -151,7 +151,7 @@ def main(config):
     
     gpu_num = torch.cuda.device_count()
     train_set = LibriMix(
-        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-100'),
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
         task=config.task + 'sep_clean',
         sample_rate=config.sr,

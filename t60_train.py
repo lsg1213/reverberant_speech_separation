@@ -93,9 +93,9 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     rev_losses = []
     clean_losses = []
     tmp = {}
-    if 'lambdaloss2' in config.name or 'lambda2' in config.name:
+    if 'lambdaloss2' in config.name or 'lambda2' in config.name: # 조정 후
         meanstd = joblib.load('mean_std2.joblib')
-    elif 'lambdaloss1' in config.name or 'lambda1' in config.name:
+    elif 'lambdaloss1' in config.name or 'lambda1' in config.name: # 조정 전
         meanstd = joblib.load('mean_std1.joblib')
     for i in meanstd:
         if int(i * 1000) not in tmp:
@@ -308,7 +308,7 @@ def main(config):
     final_epoch = 0
     
     train_set = LibriMix(
-        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-100'),
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
         task=config.task[:-1],
         sample_rate=config.sr,

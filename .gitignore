@@ -8,3 +8,4 @@
 /sample/
 /**/*.ipynb
 /train360_history
+/train100_history
