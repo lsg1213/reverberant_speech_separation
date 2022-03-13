@@ -13,7 +13,7 @@ def get_args(args: argparse.ArgumentParser = None):
     args.add_argument('--batch', type=int, default=16)
     args.add_argument('--task', type=str, default='rir')
     args.add_argument('--epoch', type=int, default=200)
-    args.add_argument('--max_patience', type=int, default=300)
+    args.add_argument('--max_patience', type=int, default=30)
     args.add_argument('--segment', type=int, default=3)
     args.add_argument('--lr', type=float, default=1e-3)
     args.add_argument('--clip_val', type=float, default=5.)
