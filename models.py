@@ -1,9 +1,9 @@
 from math import ceil
-from turtle import forward
+import asteroid
+import asteroid_filterbanks
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.nn.parameter import Parameter
 import torchaudio
 from torchaudio.models.conv_tasnet import ConvBlock, ConvTasNet
 import torchaudio.models.conv_tasnet as conv_tasnet
@@ -815,6 +815,114 @@ class T60_ConvTasNet_v1(ConvTasNet):
             output = output[..., :-num_pads]
         return output
 
+
+class T60_DPRNNTasNet_v1_Encoder(asteroid_filterbanks.Encoder):
+    def __init__(self, filterbank, is_pinv=False, as_conv1d=True, padding=0):
+        super(T60_DPRNNTasNet_v1_Encoder, self).__init__(filterbank, is_pinv, as_conv1d, padding)
+        self.fc_1 = torch.nn.Linear(1, self.n_feats_out)
+        self.fc_2 = torch.nn.Linear(1, self.n_feats_out)
+
+    def forward(self, waveform, t60):
+        filters = self.get_filters()
+        waveform = self.filterbank.pre_analysis(waveform)
+        alpha = F.softplus(self.fc_1(t60))
+        beta = self.fc_2(t60)
+        spec = asteroid_filterbanks.enc_dec.multishape_conv1d(
+            waveform,
+            filters=filters,
+            stride=self.stride,
+            padding=self.padding,
+            as_conv1d=self.as_conv1d,
+        )
+        spec = alpha.unsqueeze(-1) * spec + beta.unsqueeze(-1)
+        return self.filterbank.post_analysis(spec)
+
+
+class T60_DPRNNTasNet_v1(asteroid.models.base_models.BaseEncoderMaskerDecoder):
+    def __init__(
+        self,
+        config,
+        out_chan=None,
+        bn_chan=128,
+        hid_size=128,
+        chunk_size=100,
+        hop_size=None,
+        n_repeats=6,
+        norm_type="gLN",
+        mask_act="sigmoid",
+        bidirectional=True,
+        rnn_type="LSTM",
+        num_layers=1,
+        dropout=0,
+        in_chan=None,
+        fb_name="free",
+        kernel_size=16,
+        n_filters=64,
+        stride=8,
+        encoder_activation=None,
+        sample_rate=8000,
+        use_mulcat=False,
+        **fb_kwargs,
+    ):
+        self.config = config
+        n_src = self.config.speechnum
+        encoder, decoder = asteroid_filterbanks.make_enc_dec(
+            fb_name,
+            kernel_size=kernel_size,
+            n_filters=n_filters,
+            stride=stride,
+            sample_rate=sample_rate,
+            **fb_kwargs,
+        )
+        n_feats = encoder.n_feats_out
+        if in_chan is not None:
+            assert in_chan == n_feats, (
+                "Number of filterbank output channels"
+                " and number of input channels should "
+                "be the same. Received "
+                f"{n_feats} and {in_chan}"
+            )
+        # Update in_chan
+        masker = asteroid.models.dprnn_tasnet.DPRNN(
+            n_feats,
+            n_src,
+            out_chan=out_chan,
+            bn_chan=bn_chan,
+            hid_size=hid_size,
+            chunk_size=chunk_size,
+            hop_size=hop_size,
+            n_repeats=n_repeats,
+            norm_type=norm_type,
+            mask_act=mask_act,
+            bidirectional=bidirectional,
+            rnn_type=rnn_type,
+            num_layers=num_layers,
+            dropout=dropout,
+            use_mulcat=use_mulcat,
+        )
+        fb = asteroid_filterbanks.get(fb_name)(n_filters, kernel_size, stride=stride, sample_rate=sample_rate, **fb_kwargs)
+        encoder = T60_DPRNNTasNet_v1_Encoder(fb, padding=fb_kwargs.get('padding', 0))
+        super().__init__(encoder, masker, decoder, encoder_activation=encoder_activation)
+
+    def forward(self, wav, **kwargs):
+        t60 = kwargs.get('t60')
+        # Remember shape to shape reconstruction, cast to Tensor for torchscript
+        shape = asteroid.models.base_models.jitable_shape(wav)
+        # Reshape to (batch, n_mix, time)
+        wav = _unsqueeze_to_3d(wav)
+
+        # Real forward
+        tf_rep = self.forward_encoder(wav, t60.unsqueeze(1))
+        est_masks = self.forward_masker(tf_rep)
+        masked_tf_rep = self.apply_masks(tf_rep, est_masks)
+        decoded = self.forward_decoder(masked_tf_rep)
+
+        reconstructed = asteroid.models.base_models.pad_x_to_y(decoded, wav)
+        return _shape_reconstructed(reconstructed, shape)
+        
+    def forward_encoder(self, wav: torch.Tensor, t60) -> torch.Tensor:
+        tf_rep = self.encoder(wav, t60)
+        return self.enc_activation(tf_rep)
 
 
 class T60_v2_ConvBlock(T60_ConvBlock):

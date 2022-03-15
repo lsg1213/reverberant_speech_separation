@@ -151,18 +151,19 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             else:
                 rev_loss = criterion(logits, clean_sep)
                 loss = rev_loss
+            if mode == 'train':
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                optimizer.step()
 
             if config.recursive:
-                if mode == 'train':
-                    optimizer.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
-                    optimizer.step()
-
-                inputs = []
+                logits = logits.detach()
+                logits.requires_grad_(True)
+                inputs = [mix, logits.sum(1)]
                 for i in range(1, config.iternum):
-                    inputs.append(mix)
                     mix = torch.stack(inputs).mean(0)
+                    lambda_val = torch.e ** (- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
@@ -176,26 +177,22 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                         clean = criterion(clean_logits, clean_sep).mean()
                         clean_losses.append(clean.item())
                         progress_bar_dict.update({'clean_loss': np.mean(clean_losses)})
-                        lambda_val = torch.e ** (- criterion(logits.clone().detach().sum(1, keepdim=True).repeat((1,2,1)), clean_sep) / 10.)
                         loss = (rev_loss * lambda_val).mean() + clean
                     elif 'lambda' in config.name:
                         rev_loss = criterion(logits, clean_sep)
-                        loss = (rev_loss * lambda_val).mean()
+                        loss = (rev_loss).mean()
                     else:
                         rev_loss = criterion(logits, clean_sep)
                         loss = rev_loss
-                    mix = logits.clone().detach().sum(1)
+                    
+                    logits = logits.detach()
+                    logits.requires_grad_(True)
+                    inputs.append(logits.clone().sum(1))
                     if mode == 'train':
                         optimizer.zero_grad()
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                         optimizer.step()
-            else:
-                if mode == 'train':
-                    optimizer.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
-                    optimizer.step()
 
             if torch.isnan(rev_loss).sum() != 0:
                 print('nan is detected')
@@ -270,7 +267,7 @@ def get_model(config):
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive:
-            resume = torch.load('save/t60_T60_v1_64_rir_norm_sisdr_lambdaloss2/best.pt')['model']
+            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     return model
 
