@@ -84,6 +84,21 @@ class newPITLossWrapper(PITLossWrapper):
         return mean_loss, reordered
 
 
+def makelambda(name):
+    def getlambda2(val):
+        return torch.e ** (torch.stack(val) / 10)
+
+    def getlambda3(val):
+        val = torch.e ** (1 - torch.stack(val) / 10)
+        val = val / (1 + val)
+        return val
+
+    if 'lambdaloss2' in name or 'lambda2' in name:
+        return getlambda2
+    elif 'lambdaloss3' in name:
+        return getlambda3
+
+
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
     device = get_device()
     losses = []
@@ -103,6 +118,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
         for j in meanstd[i]:
             tmp[int(i * 1000)][j] = meanstd[i][j].to(device)
     meanstd = tmp
+    calculate_lambda = makelambda(config.name)
 
     num = 0
     with tqdm(dataloader) as pbar:
@@ -124,11 +140,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
                 for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
                     lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
-                if 'lambdaloss3' in config.name:
-                    lambda_val = torch.e ** (1 - torch.stack(lambda_val) / 10)
-                    lambda_val = lambda_val / (1 + lambda_val)
-                else:
-                    lambda_val = torch.e ** (torch.stack(lambda_val) / 10)
+                lambda_val = calculate_lambda(torch.stack(lambda_val))
             else:
                 lambda_val = t60
 
@@ -142,7 +154,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 rev_loss = criterion(logits, clean_sep)
                 cleanmix_mean = cleanmix.mean(-1, keepdim=True)
                 cleanmix_std = cleanmix.std(-1, keepdim=True)
-                clean_lambda_val = torch.e ** (- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
+                clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
                 clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
@@ -170,7 +182,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     inputs = [logits.sum(1)]
                 for i in range(1, config.iternum):
                     mix = torch.stack(inputs).mean(0)
-                    lambda_val = torch.e ** (- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
+                    lambda_val = calculate_lambda(- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep))
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
@@ -178,7 +190,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     
                     if 'lambdaloss' in config.name:
                         rev_loss = criterion(logits, clean_sep)
-                        clean_lambda_val = torch.e ** (- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
+                        clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
                         clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                         clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                         clean = criterion(clean_logits, clean_sep).mean()
