@@ -86,14 +86,18 @@ class newPITLossWrapper(PITLossWrapper):
 
 def makelambda(name):
     def getlambda2(val):
-        return torch.e ** (torch.stack(val) / 10)
+        if not isinstance(val, torch.Tensor):
+            val = torch.stack(val)
+        return torch.e ** (val / 10)
 
     def getlambda3(val):
-        val = torch.e ** (1 - torch.stack(val) / 10)
+        if not isinstance(val, torch.Tensor):
+            val = torch.stack(val)
+        val = torch.e ** (1 - val / 10)
         val = val / (1 + val)
         return val
 
-    if 'lambdaloss2' in name or 'lambda2' in name:
+    if 'lambdaloss2' in name or 'lambda2' in name or 'lambda1' in name:
         return getlambda2
     elif 'lambdaloss3' in name:
         return getlambda3
