@@ -93,7 +93,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     rev_losses = []
     clean_losses = []
     tmp = {}
-    if 'lambdaloss2' in config.name or 'lambda2' in config.name: # 조정 후
+    if 'lambdaloss2' in config.name or 'lambda2' in config.name or 'lambdaloss3' in config.name: # 조정 후
         meanstd = joblib.load('mean_std2.joblib')
     elif 'lambdaloss1' in config.name or 'lambda1' in config.name: # 조정 전
         meanstd = joblib.load('mean_std1.joblib')
@@ -124,7 +124,11 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
                 for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
                     lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
-                lambda_val = torch.e ** (torch.stack(lambda_val) / 10)
+                if 'lambdaloss3' in config.name:
+                    lambda_val = torch.e ** (1 - torch.stack(lambda_val) / 10)
+                    lambda_val = lambda_val / (1 + lambda_val)
+                else:
+                    lambda_val = torch.e ** (torch.stack(lambda_val) / 10)
             else:
                 lambda_val = t60
 
@@ -157,10 +161,13 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
                 optimizer.step()
 
-            if config.recursive:
+            if config.recursive or config.recursive2:
                 logits = logits.detach()
                 logits.requires_grad_(True)
-                inputs = [mix, logits.sum(1)]
+                if config.recursive:
+                    inputs = [mix, logits.sum(1)]
+                elif config.recursive2:
+                    inputs = [logits.sum(1)]
                 for i in range(1, config.iternum):
                     mix = torch.stack(inputs).mean(0)
                     lambda_val = torch.e ** (- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep) / 10.)
@@ -185,9 +192,12 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                         rev_loss = criterion(logits, clean_sep)
                         loss = rev_loss
                     
-                    logits = logits.detach()
-                    logits.requires_grad_(True)
-                    inputs.append(logits.clone().sum(1))
+                    if config.recursive:
+                        logits = logits.detach()
+                        logits.requires_grad_(True)
+                        inputs.append(logits.clone().sum(1))
+                    elif config.recursive2:
+                        inputs = [logits.clone().sum(1)]
                     if mode == 'train':
                         optimizer.zero_grad()
                         loss.backward()
@@ -266,7 +276,7 @@ def get_model(config):
     else:
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
-        if config.recursive:
+        if config.recursive or config.recursive2:
             resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     return model
@@ -293,6 +303,8 @@ def main(config):
         name += '_norm'
     if config.recursive:
         name += f'_recursive_{config.iternum}'
+    if config.recursive2:
+        name += f'_recursive2_{config.iternum}'
     config.name = name + '_' + config.name if config.name is not '' else ''
     config.tensorboard_path = os.path.join(config.tensorboard_path, config.name)
     writer = SummaryWriter(config.tensorboard_path)
@@ -350,7 +362,7 @@ def main(config):
 
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
-    if config.recursive:
+    if config.recursive or config.recursive2:
         scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
 
     with open(os.path.join(savepath, 'config.json'), 'w') as f:
@@ -440,6 +452,7 @@ if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument('--test', action='store_true')
     args.add_argument('--recursive', action='store_true')
+    args.add_argument('--recursive2', action='store_true')
     args.add_argument('--t60', type=bool, default=True)
     args.add_argument('--iternum', type=int, default=2)
     main(get_args(args))
