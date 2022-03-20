@@ -110,7 +110,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 
 def get_model(config):
     if config.model == '':
-        model = ConvTasNet(msk_activate='relu')
+        model = ConvTasNet()
     elif config.model == 'v1':
         model = ConvTasNet(msk_activate='relu', msk_num_layers=5)
     elif config.model == 'v2':
@@ -120,7 +120,7 @@ def get_model(config):
     elif config.model == 'tas':
         model = TasNet()
     elif config.model == 'dprnn':
-        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=500)
     return model
 
 

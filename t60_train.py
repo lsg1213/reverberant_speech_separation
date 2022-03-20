@@ -29,78 +29,11 @@ np.random.seed(3000)
 from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
-from evals import evaluate
+from t60_eval import evaluate
 from torchaudio.models import ConvTasNet
-from models import ConvBlock
+from t60_utils import *
 import models
 import joblib
-
-
-class newPITLossWrapper(PITLossWrapper):
-    def __init__(self, loss_func, pit_from="pw_mtx", perm_reduce=None, reduction=True):
-        super(newPITLossWrapper, self).__init__(loss_func, pit_from, perm_reduce)
-        self.reduction = reduction
-
-    def forward(self, est_targets, targets, return_est=False, reduce_kwargs=None, **kwargs):
-        n_src = targets.shape[1]
-        assert n_src < 10, f"Expected source axis along dim 1, found {n_src}"
-        if self.pit_from == "pw_mtx":
-            # Loss function already returns pairwise losses
-            pw_losses = self.loss_func(est_targets, targets, **kwargs)
-        elif self.pit_from == "pw_pt":
-            # Compute pairwise losses with a for loop.
-            pw_losses = self.get_pw_losses(self.loss_func, est_targets, targets, **kwargs)
-        elif self.pit_from == "perm_avg":
-            # Cannot get pairwise losses from this type of loss.
-            # Find best permutation directly.
-            min_loss, batch_indices = self.best_perm_from_perm_avg_loss(
-                self.loss_func, est_targets, targets, **kwargs
-            )
-            # Take the mean over the batch
-            mean_loss = torch.mean(min_loss)
-            if not return_est:
-                return mean_loss
-            reordered = self.reorder_source(est_targets, batch_indices)
-            return mean_loss, reordered
-        else:
-            return
-
-        assert pw_losses.ndim == 3, (
-            "Something went wrong with the loss " "function, please read the docs."
-        )
-        assert pw_losses.shape[0] == targets.shape[0], "PIT loss needs same batch dim as input"
-
-        reduce_kwargs = reduce_kwargs if reduce_kwargs is not None else dict()
-        min_loss, batch_indices = self.find_best_perm(
-            pw_losses, perm_reduce=self.perm_reduce, **reduce_kwargs
-        )
-        if self.reduction:
-            mean_loss = torch.mean(min_loss)
-        else:
-            mean_loss = min_loss
-        if not return_est:
-            return mean_loss
-        reordered = self.reorder_source(est_targets, batch_indices)
-        return mean_loss, reordered
-
-
-def makelambda(name):
-    def getlambda2(val):
-        if not isinstance(val, torch.Tensor):
-            val = torch.stack(val)
-        return torch.e ** (val / 10)
-
-    def getlambda3(val):
-        if not isinstance(val, torch.Tensor):
-            val = torch.stack(val)
-        val = torch.e ** (1 - val / 10)
-        val = val / (1 + val)
-        return val
-
-    if 'lambdaloss2' in name or 'lambda2' in name or 'lambda1' in name:
-        return getlambda2
-    elif 'lambdaloss3' in name:
-        return getlambda3
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -140,14 +73,13 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             mix = rev_sep.sum(1)
 
             if 'lambda' in config.name:
-                lambda_val = []
+                rawlambda_val = []
                 time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
                 for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
-                    lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
-                lambda_val = calculate_lambda(torch.stack(lambda_val))
+                    rawlambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
+                lambda_val = calculate_lambda(torch.stack(rawlambda_val))
             else:
                 lambda_val = t60
-
 
             mix_std = mix.std(-1, keepdim=True)
             mix_mean = mix.mean(-1, keepdim=True)
@@ -163,8 +95,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
                 clean_losses.append(clean.item())
-                
-                loss = (rev_loss * lambda_val).mean() + clean
+                if 'lambdaloss3_new' in config.name:
+                    loss = (torch.where(rev_loss > 0, lambda_val, 1 / lambda_val) * rev_loss).mean() + clean
+                else:
+                    loss = (rev_loss * lambda_val).mean() + clean
             elif 'lambda' in config.name:
                 rev_loss = criterion(logits, clean_sep)
                 loss = (rev_loss).mean()
@@ -276,7 +210,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
 def get_model(config):
     splited_name = config.model.split('_')
     if config.model == '':
-        model = torchaudio.models.ConvTasNet(msk_activate='relu')
+        model = torchaudio.models.ConvTasNet(msk_activate='sigmoid')
     elif 'dprnn' in config.model:
         modelname = 'T60_DPRNNTasNet'
         if len(splited_name) > 2:
@@ -293,7 +227,7 @@ def get_model(config):
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive or config.recursive2:
-            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
+            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambdaloss3/best.pt')['model']
             model.load_state_dict(resume)
     return model
 
