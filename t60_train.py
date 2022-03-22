@@ -217,7 +217,7 @@ def get_model(config):
             modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)(config, sample_rate=config.sr)
         else:
-            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr)
+            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=500)
     elif 'tas' in config.model:
         modelname = 'T60_TasNet'
         if len(splited_name) > 2:
