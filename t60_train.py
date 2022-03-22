@@ -30,7 +30,6 @@ from data_utils import LibriMix
 from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from t60_eval import evaluate
-from torchaudio.models import ConvTasNet
 from t60_utils import *
 import models
 import joblib
