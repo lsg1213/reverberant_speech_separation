@@ -8,17 +8,15 @@ import torchaudio
 
 from args import get_args
 from multiprocessing import cpu_count
-import json
 
 import torch
 from torch.nn.modules.loss import MSELoss
-import torch.nn.functional as F
 import numpy as np
 from tensorboardX import SummaryWriter
 from asteroid.losses import pairwise_neg_sisdr, PITLossWrapper
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from tqdm import tqdm
 import torch
 torch.manual_seed(3000)
@@ -94,10 +92,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
                 clean_losses.append(clean.item())
-                if 'lambdaloss3_new' in config.name:
-                    loss = (torch.where(rev_loss > 0, lambda_val, 1 / lambda_val) * rev_loss).mean() + clean
-                else:
-                    loss = (rev_loss * lambda_val).mean() + clean
+                loss = (rev_loss * lambda_val).mean() + clean
             elif 'lambda' in config.name:
                 rev_loss = criterion(logits, clean_sep)
                 loss = (rev_loss).mean()
@@ -214,7 +209,7 @@ def get_model(config):
         modelname = 'T60_DPRNNTasNet'
         if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
-            model = getattr(models, modelname)(config, sample_rate=config.sr)
+            model = getattr(models, modelname)(config, sample_rate=config.sr, chunk_size=500)
         else:
             model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=500)
     elif 'tas' in config.model:
@@ -309,17 +304,17 @@ def main(config):
 
     model = get_model(config)
 
-    optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
-    if config.recursive or config.recursive2:
-        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
-
-    with open(os.path.join(savepath, 'config.json'), 'w') as f:
-        json.dump(vars(config), f)
-
     callbacks = []
-    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
-    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
+    optimizer = Adam(model.parameters(), lr=config.lr)
+    if 'dprnn' in config.model:
+        scheduler = StepLR(optimizer=optimizer, step_size=2, gamma=0.98, verbose=True)
+        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+    else:
+        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+        if config.recursive or config.recursive2:
+            scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
+        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+
     metric = PITLossWrapper(pairwise_neg_sisdr)
     if 'lambda' in config.name:
         criterion = newPITLossWrapper(pairwise_neg_sisdr, reduction=False)
