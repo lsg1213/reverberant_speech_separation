@@ -230,6 +230,9 @@ def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     gpu_num = torch.cuda.device_count()
     config.batch *= max(gpu_num, 1)
+    if 'dprnn' in config.model:
+        print('DPRNN config: max_patience=10')
+        config.max_patience = 10
 
     # v1: gru
     config.model = 'T60_' + config.model
