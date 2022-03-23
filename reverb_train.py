@@ -15,7 +15,7 @@ from tensorboardX import SummaryWriter
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from tqdm import tqdm
 
 from data_utils import LibriMix
@@ -23,7 +23,7 @@ from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from models import *
-from t60_train import newPITLossWrapper
+from t60_utils import newPITLossWrapper
 
 
 def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimizer=None, mode='train'):
@@ -201,11 +201,19 @@ def main(config):
         json.dump(vars(config), f)
 
     callbacks = []
-    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
-    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
+    optimizer = Adam(model.parameters(), lr=config.lr)
+    if 'dprnn' in config.model:
+        scheduler = StepLR(optimizer=optimizer, step_size=2, gamma=0.98, verbose=True)
+        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+    else:
+        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+        if config.recursive or config.recursive2:
+            scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
+        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+
     metric = newPITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx", reduction=False)
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
-    
+
     if config.resume:
         resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
         model.load_state_dict(resume['model'])
@@ -232,7 +240,10 @@ def main(config):
 
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
 
-        scheduler.step(val_loss)
+        if 'dprnn' in config.name:
+            scheduler.step()
+        else:
+            scheduler.step(val_score)
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
