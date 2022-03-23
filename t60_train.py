@@ -74,7 +74,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
                 for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
                     rawlambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
-                lambda_val = calculate_lambda(torch.stack(rawlambda_val))
+                rawlambda_val = torch.stack(rawlambda_val)
+                lambda_val = calculate_lambda(rawlambda_val)
             else:
                 lambda_val = t60
 
@@ -87,7 +88,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 rev_loss = criterion(logits, clean_sep)
                 cleanmix_mean = cleanmix.mean(-1, keepdim=True)
                 cleanmix_std = cleanmix.std(-1, keepdim=True)
-                clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
+                clean_raw_lambda = - criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep)
+                clean_lambda_val = calculate_lambda(clean_raw_lambda)
                 clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
@@ -114,7 +116,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     inputs = [logits.sum(1)]
                 for i in range(1, config.iternum):
                     mix = torch.stack(inputs).mean(0)
-                    lambda_val = calculate_lambda(- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep))
+                    lambda_val = calculate_lambda(rawlambda_val + criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), logits))
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
@@ -122,7 +124,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     
                     if 'lambdaloss' in config.name:
                         rev_loss = criterion(logits, clean_sep)
-                        clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
+                        clean_lambda_val = calculate_lambda(clean_raw_lambda + criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), logits))
                         clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
                         clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                         clean = criterion(clean_logits, clean_sep).mean()
@@ -352,7 +354,10 @@ def main(config):
 
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
 
-        scheduler.step(val_score)
+        if 'dprnn' in config.name:
+            scheduler.step()
+        else:
+            scheduler.step(val_score)
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':

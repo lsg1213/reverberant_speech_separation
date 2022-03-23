@@ -65,5 +65,5 @@ def makelambda(name):
 
     if 'lambdaloss2' in name or 'lambda2' in name or 'lambda1' in name or 'lambdaloss1' in name:
         return getlambda2
-    elif 'lambdaloss3' in name:
+    elif 'lambdaloss3' in name or 'lambda3' in name:
         return getlambda3
