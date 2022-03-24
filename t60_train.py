@@ -42,7 +42,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     rev_losses = []
     clean_losses = []
     tmp = {}
-    if 'lambdaloss2' in config.name or 'lambda2' in config.name or 'lambdaloss3' in config.name: # 조정 후
+    if 'lambdaloss2' in config.name or 'lambda2' in config.name or 'lambdaloss3' in config.name or 'lambda3' in config.name: # 조정 후
         meanstd = joblib.load('mean_std2.joblib')
     elif 'lambdaloss1' in config.name or 'lambda1' in config.name: # 조정 전
         meanstd = joblib.load('mean_std1.joblib')
@@ -320,6 +320,7 @@ def main(config):
             scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
         callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
 
+    callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = PITLossWrapper(pairwise_neg_sisdr)
     if 'lambda' in config.name:
         criterion = newPITLossWrapper(pairwise_neg_sisdr, reduction=False)
