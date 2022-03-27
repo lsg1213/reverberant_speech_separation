@@ -88,9 +88,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 rev_loss = criterion(logits, clean_sep)
                 cleanmix_mean = cleanmix.mean(-1, keepdim=True)
                 cleanmix_std = cleanmix.std(-1, keepdim=True)
-                clean_raw_lambda = - criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep)
-                clean_lambda_val = calculate_lambda(clean_raw_lambda)
-                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
+                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=calculate_lambda(torch.zeros_like(lambda_val))) 
                 clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                 clean = criterion(clean_logits, clean_sep).mean()
                 clean_losses.append(clean.item())
@@ -116,7 +114,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     inputs = [logits.sum(1)]
                 for i in range(1, config.iternum):
                     mix = torch.stack(inputs).mean(0)
-                    lambda_val = calculate_lambda(rawlambda_val + criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), logits))
+                    lambda_val = calculate_lambda(- criterion(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep))
                     mix_std = mix.std(-1, keepdim=True)
                     mix_mean = mix.mean(-1, keepdim=True)
                     logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
@@ -124,8 +122,9 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     
                     if 'lambdaloss' in config.name:
                         rev_loss = criterion(logits, clean_sep)
-                        clean_lambda_val = calculate_lambda(clean_raw_lambda + criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), logits))
-                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val) 
+                        # clean_lambda_val = calculate_lambda(clean_raw_lambda + criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), logits))
+                        # clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
+                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=calculate_lambda(torch.zeros_like(lambda_val)))
                         clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                         clean = criterion(clean_logits, clean_sep).mean()
                         clean_losses.append(clean.item())
@@ -223,7 +222,7 @@ def get_model(config):
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive or config.recursive2:
-            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambdaloss3/best.pt')['model']
+            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     return model
 

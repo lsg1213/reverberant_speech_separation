@@ -1,3 +1,5 @@
+import argparse
+import os
 from asteroid.losses import pairwise_neg_sisdr
 from asteroid.dsp.normalization import normalize_estimates
 import torch
@@ -42,7 +44,8 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                     time = torch.tensor(list(meanstd.keys())).unsqueeze(0).to(device)
                     for i in time.squeeze()[torch.argmin(torch.abs(time - torch.round(t60 * 1000).int().unsqueeze(-1)), -1)].tolist():
                         lambda_val.append(torch.normal(meanstd[i]['mean'], meanstd[i]['std']))
-                    lambda_val = calculate_lambda(torch.stack(lambda_val))
+                    rawlambda_val = torch.stack(lambda_val)
+                    lambda_val = calculate_lambda(rawlambda_val)
                 else:
                     lambda_val = t60
 
@@ -63,8 +66,8 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                     elif config.recursive2:
                         inputs = [logits.sum(1)]
                     for i in range(1, config.iternum):
+                        lambda_val = calculate_lambda(rawlambda_val + metric(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), logits))
                         mix = torch.stack(inputs).mean(0)
-                        lambda_val = calculate_lambda(- metric(mix.clone().detach().unsqueeze(1).repeat((1,2,1)), clean_sep))
                         mix_std = mix.std(-1, keepdim=True)
                         mix_mean = mix.mean(-1, keepdim=True)
                         logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
@@ -95,3 +98,70 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
 
                 pbar.set_postfix(progress_bar_dict)
     return mean(0.), mean(si_snris)
+
+
+def main(config):
+    from t60_train import get_model, makedir, ArgumentError, SummaryWriter, LibriMix
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
+    gpu_num = torch.cuda.device_count()
+    config.batch *= max(gpu_num, 1)   
+    
+    config.model = 'T60_' + config.model
+    name = 't60_' + (config.model if config.model is not '' else 'baseline')
+    name += f'_{config.batch}'
+    if config.model != '' and config.task == '':
+        raise ArgumentError('clean separation model should be baseline model')
+    if 'rir' not in config.task:
+        config.task = ''
+        name += '_clean'
+    else:
+        name += '_' + config.task
+        config.task += '_'
+    if config.norm:
+        name += '_norm'
+    if config.recursive:
+        name += f'_recursive_{config.iternum}'
+    if config.recursive2:
+        name += f'_recursive2_{config.iternum}'
+    config.name = name + '_' + config.name if config.name is not '' else ''
+    config.tensorboard_path = os.path.join(config.tensorboard_path, config.name + 'hi')
+    writer = SummaryWriter(config.tensorboard_path)
+    savepath = os.path.join('save', config.name)
+    device = get_device()
+    makedir(config.tensorboard_path)
+    makedir(savepath)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
+    gpu_num = torch.cuda.device_count()
+    config.batch *= max(gpu_num, 1)
+    test_set = LibriMix(
+        csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
+        config=config,
+        task=config.task[:-1],
+        sample_rate=config.sr,
+        n_src=config.speechnum,
+        segment=None,
+        return_id=True,
+    )
+
+    resume = torch.load(os.path.join(savepath, 'best.pt'))
+    model = get_model(config)
+    model.load_state_dict(resume['model'])
+    model = model.to(device)
+    si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
+    writer.add_scalar('test/SI-SDRI', si_sdri, resume['epoch'])
+    writer.add_scalar('test/SI-SNRI', si_snri, resume['epoch'])
+    
+
+if __name__ == '__main__':
+    from args import get_args
+    args = argparse.ArgumentParser()
+    args.add_argument('--test', action='store_true')
+    args.add_argument('--recursive', action='store_true')
+    args.add_argument('--recursive2', action='store_true')
+    args.add_argument('--t60', type=bool, default=True)
+    args.add_argument('--iternum', type=int, default=2)
+
+    main(get_args(args))
+    
