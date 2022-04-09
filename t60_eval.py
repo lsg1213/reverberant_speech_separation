@@ -21,7 +21,7 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
     input_scores = []
 
     tmp = {}
-    if 'lambdaloss2' in config.name or 'lambda2' in config.name or 'lambdaloss3' in config.name: # 조정 후
+    if 'lambdaloss2' in config.name or 'lambda2' in config.name or 'lambdaloss3' in config.name or 'lambda3' in config.name: # 조정 후
         meanstd = joblib.load('mean_std2.joblib')
     elif 'lambdaloss1' in config.name or 'lambda1' in config.name: # 조정 전
         meanstd = joblib.load('mean_std1.joblib')

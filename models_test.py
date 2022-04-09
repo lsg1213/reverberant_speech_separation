@@ -36,40 +36,6 @@ class Test:
         )
         self.testset.df = self.testset.df[:1]
 
-    def test_ConvTasNet_v1(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'v1'
-        self.make_testdataset(config)
-        model = ConvTasNet(msk_num_layers=5).to(self.device)
-        for rev_sep, clean_sep, _ in self.testset:
-            mix = rev_sep.sum(-1)[None].to(self.device)
-            results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-
-    def test_ConvTasNet_v2(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'v2'
-        self.make_testdataset(config)
-        model = ConvTasNet_v2(reverse=True).to(self.device)
-        for rev_sep, clean_sep, _, _ in self.testset:
-            mix = rev_sep.sum(-1)[None].to(self.device)
-            results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-
-    # def test_ConvTasNet_v3(self):
-    #     config = deepcopy(self.config)
-    #     config.task = 'rir'
-    #     config.model = 'v3'
-    #     self.make_testdataset(config)
-    #     model = ConvTasNet_v3(reverse=True).to(self.device)
-    #     for rev_sep, clean_sep, _, distance in self.testset:
-    #         distance = torch.from_numpy(distance[None]).to(self.device)
-    #         mix = rev_sep.sum(-1)[None].to(self.device)
-    #         results = model(mix, distance)
-    #         assert results.shape == clean_sep[None].transpose(-2,-1).shape
-
     def test_DPRNN(self):
         config = deepcopy(self.config)
         config.task = 'rir'
@@ -80,54 +46,6 @@ class Test:
             mix = rev_sep.sum(-1)[None].to(self.device)
             results = model(mix)
             assert results.shape == clean_sep[None].transpose(-2,-1).shape
-
-    def test_Dereverb_DPRNNTasNet_v1(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'dprnn_v1'
-        self.make_testdataset(config)
-        model = Dereverb_DPRNNTasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = rev_sep.sum(-1)[None].to(self.device)
-            dereverb_results, results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-
-            dereverb_results = model(mix, test=True)
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-
-    def test_Dereverb_TasNet_v1(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'tas_v1'
-        self.make_testdataset(config)
-        model = Dereverb_TasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = rev_sep.sum(-1)[None].to(self.device)
-            dereverb_results, results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-
-            dereverb_results = model(mix, test=True)
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-    
-    def test_Dereverb_ConvTasNet_v1(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'v1'
-        config.test = False
-        self.make_testdataset(config)
-        model = Dereverb_ConvTasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _ in self.testset:
-            mix = rev_sep.sum(-1)[None].to(self.device)
-            dereverb_results, results = model(mix)
-            assert results.shape == clean_sep[None].transpose(-2,-1).shape
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-
-            dereverb_results = model(mix, test=True)
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def test_T60_ConvTasNet_v1(self):
         config = deepcopy(self.config)
@@ -192,34 +110,6 @@ class Test:
 
             dereverb_results = model(mix, t60=t60)
             assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).repeat((2,1,1)).shape
-
-    def test_Dereverb_test_v1(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'test_v1'
-        config.test = False
-        self.make_testdataset(config)
-        model = Dereverb_test_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = rev_sep.sum(-1)[None].to(self.device)
-
-            dereverb_results = model(mix)
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
-
-    def test_Dereverb_test_v2(self):
-        config = deepcopy(self.config)
-        config.task = 'rir'
-        config.model = 'test_v2'
-        config.test = False
-        self.make_testdataset(config)
-        model = Dereverb_test_v2(config).to(self.device)
-        for rev_sep, clean_sep, _, distance in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
-            mix = rev_sep.sum(-1)[None].to(self.device)
-
-            dereverb_results = model(mix)
-            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def run(self) -> None:
         functions = [i for i in dir(self) if 'test_' in i]

@@ -120,7 +120,7 @@ def get_model(config):
     elif config.model == 'tas':
         model = TasNet()
     elif config.model == 'dprnn':
-        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=500)
+        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=1500)
     return model
 
 
@@ -202,15 +202,13 @@ def main(config):
 
     callbacks = []
     optimizer = Adam(model.parameters(), lr=config.lr)
-    if 'dprnn' in config.model:
-        scheduler = StepLR(optimizer=optimizer, step_size=2, gamma=0.98, verbose=True)
-        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
-    else:
-        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
-        if config.recursive or config.recursive2:
-            scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=2, verbose=True)
-        callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
-        
+    # if 'dprnn' in config.model:
+    #     scheduler = StepLR(optimizer=optimizer, step_size=2, gamma=0.98, verbose=True)
+    #     callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+    # else:
+    scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+    callbacks.append(EarlyStopping(monitor="val_score", mode="max", patience=config.max_patience, verbose=True))
+
     callbacks.append(Checkpoint(checkpoint_dir=os.path.join(savepath, 'checkpoint.pt'), monitor='val_score', mode='max', verbose=True))
     metric = newPITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx", reduction=False)
     criterion = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
@@ -241,10 +239,10 @@ def main(config):
 
         results = {'train_loss': train_loss, 'val_loss': val_loss, 'val_score': val_score}
 
-        if 'dprnn' in config.name:
-            scheduler.step()
-        else:
-            scheduler.step(val_score)
+        # if 'dprnn' in config.name:
+        #     scheduler.step()
+        # else:
+        scheduler.step(val_score)
         final_epoch += 1
         for callback in callbacks:
             if type(callback).__name__ == 'Checkpoint':
