@@ -19,7 +19,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from tqdm import tqdm
 
 from data_utils import LibriMix
-from utils import makedir, get_device, no_distance_models
+from utils import makedir, get_device, no_distance_models, clip_grad_norm_
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from models import *
@@ -71,7 +71,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if mode == 'train':
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                clip_grad_norm_(model.parameters(), config.clip_val, error_if_nonfinite=True)
                 optimizer.step()
             losses.append(loss.item())
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}

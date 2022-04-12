@@ -29,6 +29,7 @@ from utils import makedir, get_device, no_distance_models
 from callbacks import EarlyStopping, Checkpoint
 from t60_eval import evaluate
 from t60_utils import *
+from utils import clip_grad_norm_
 import models
 import joblib
 
@@ -102,7 +103,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             if mode == 'train':
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                try:
+                    clip_grad_norm_(model.parameters(), config.clip_val, error_if_nonfinite=True)
+                except:
+                    import pdb; pdb.set_trace()
                 optimizer.step()
 
             if config.recursive or config.recursive2:
@@ -146,10 +150,11 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     if mode == 'train':
                         optimizer.zero_grad()
                         loss.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_val)
+                        clip_grad_norm_(model.parameters(), config.clip_val)
                         optimizer.step()
 
             if torch.isnan(rev_loss).sum() != 0:
+                import pdb; pdb.set_trace()
                 print('nan is detected')
                 exit()
             
@@ -218,6 +223,9 @@ def get_model(config):
         if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)()
+        if config.recursive or config.recursive2:
+            resume = torch.load('save/t60_T60_tas_v1_32_rir_norm_sisdr_lambda2/best.pt')['model']
+            model.load_state_dict(resume)
     else:
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
