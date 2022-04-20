@@ -127,8 +127,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                     if 'lambdaloss' in config.name:
                         rev_loss = criterion(logits, clean_sep)
                         # clean_lambda_val = calculate_lambda(clean_raw_lambda + criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), logits))
-                        # clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
-                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=calculate_lambda(torch.zeros_like(lambda_val)))
+                        clean_lambda_val = calculate_lambda(- criterion(cleanmix.unsqueeze(1).repeat((1,2,1)), clean_sep))
+                        clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=clean_lambda_val)
                         clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
                         clean = criterion(clean_logits, clean_sep).mean()
                         clean_losses.append(clean.item())
@@ -215,9 +215,9 @@ def get_model(config):
         modelname = 'T60_DPRNNTasNet'
         if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
-            model = getattr(models, modelname)(config, sample_rate=config.sr, chunk_size=1500)
+            model = getattr(models, modelname)(config, sample_rate=config.sr, chunk_size=100)
         else:
-            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=1500)
+            model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=100)
     elif 'tas' in config.model:
         modelname = 'T60_TasNet'
         if len(splited_name) > 2:
@@ -230,7 +230,7 @@ def get_model(config):
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive or config.recursive2:
-            resume = torch.load('save/t60_T60_v1_48_rir_norm_sisdr_lambda3/best.pt')['model']
+            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     return model
 
@@ -337,7 +337,7 @@ def main(config):
         criterion = MSELoss()
     
     if config.resume:
-        resume = torch.load(os.path.join(savepath, 'checkpoint.pt'))
+        resume = torch.load(os.path.join(savepath, 'best.pt'))
         model.load_state_dict(resume['model'])
         model = model.to(device)
         optimizer.load_state_dict(resume['optimizer'])
