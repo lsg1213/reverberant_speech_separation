@@ -81,16 +81,17 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             logits = model((mix - mix_mean) / mix_std, t60=lambda_val)
             logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
             
-            if 'lambdaloss' in config.name:
-                rev_loss = criterion(logits, clean_sep)
-                cleanmix_mean = cleanmix.mean(-1, keepdim=True)
-                cleanmix_std = cleanmix.std(-1, keepdim=True)
-                clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=calculate_lambda(torch.zeros_like(lambda_val))) 
-                clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
-                clean = criterion(clean_logits, clean_sep).mean()
-                clean_losses.append(clean.item())
-                loss = (rev_loss * lambda_val).mean() + clean
-            elif 'lambda' in config.name:
+            # if 'lambdaloss' in config.name:
+            #     rev_loss = criterion(logits, clean_sep)
+            #     cleanmix_mean = cleanmix.mean(-1, keepdim=True)
+            #     cleanmix_std = cleanmix.std(-1, keepdim=True)
+            #     clean_logits = model((cleanmix - cleanmix_mean) / cleanmix_std, t60=calculate_lambda(torch.zeros_like(lambda_val))) 
+            #     clean_logits = clean_logits * cleanmix_std.unsqueeze(1) + cleanmix_mean.unsqueeze(1)
+            #     clean = criterion(clean_logits, clean_sep).mean()
+            #     clean_losses.append(clean.item())
+            #     loss = (rev_loss * lambda_val).mean() + clean
+            # el
+            if 'lambda' in config.name:
                 rev_loss = criterion(logits, clean_sep)
                 loss = (rev_loss).mean()
             else:
@@ -426,4 +427,9 @@ if __name__ == '__main__':
     args.add_argument('--recursive2', action='store_true')
     args.add_argument('--t60', type=bool, default=True)
     args.add_argument('--iternum', type=int, default=2)
-    main(get_args(args))
+    
+    config = get_args(args)
+    if config.recursive2:
+        config.max_patience = 10
+    main(config)
+

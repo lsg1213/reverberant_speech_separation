@@ -118,6 +118,21 @@ class Test:
             results = model(mix)
             assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
+    def test_T60_Sepformer_v1(self):
+        config = deepcopy(self.config)
+        config.task = 'rir'
+        config.model = 'v1'
+        config.test = False
+        config.t60 = True
+        self.make_testdataset(config)
+        model = T60_Sepformer_v1(config).to(self.device)
+        for rev_sep, clean_sep, _, t60 in self.testset:
+            t60 = t60[None].to(self.device).repeat((2))
+            mix = rev_sep.sum(-1)[None].to(self.device).repeat((2,1))
+
+            dereverb_results = model(mix, t60=t60)
+            assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).repeat((2,1,1)).shape
+
     def run(self) -> None:
         functions = [i for i in dir(self) if 'test_' in i]
         test_st = time()

@@ -1113,4 +1113,46 @@ class Sepformer(torch.nn.Module):
         else:
             est_source = est_source[:, :T_origin, :]
         return est_source.transpose(-1,-2)
+
+
+class T60_Sepformer_v1(Sepformer):
+    def __init__(self, config):
+        super().__init__(config)
+        hparams_file = 'sepformer.yaml'
+        with open(hparams_file) as fin:
+            hparams = load_hyperpyyaml(fin)
+        modules = hparams['modules']
+        self.config = config
+        self.encoder = modules['encoder']
+        self.decoder = modules['decoder']
+        self.masknet = modules['masknet']
+        self.fc_1 = torch.nn.Linear(1, self.encoder.conv1d.out_channels)
+        self.fc_2 = torch.nn.Linear(1, self.encoder.conv1d.out_channels)
+    
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        t60 = kwargs.get('t60').unsqueeze(-1)
+        alpha = F.softplus(self.fc_1(t60))
+        beta = self.fc_2(t60)
+        mix_w = alpha.unsqueeze(-1) * self.encoder(input) + beta.unsqueeze(-1)
+        est_mask = self.masknet(mix_w)
+        mix_w = torch.stack([mix_w] * self.config.speechnum)
+        sep_h = mix_w * est_mask
+
+        # Decoding
+        est_source = torch.cat(
+            [
+                self.decoder(sep_h[i]).unsqueeze(-1)
+                for i in range(self.config.speechnum)
+            ],
+            dim=-1,
+        )
+
+        # T changed after conv1d in encoder, fix it here
+        T_origin = input.size(1)
+        T_est = est_source.size(1)
+        if T_origin > T_est:
+            est_source = F.pad(est_source, (0, 0, 0, T_origin - T_est))
+        else:
+            est_source = est_source[:, :T_origin, :]
+        return est_source.transpose(-1,-2)
         

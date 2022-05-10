@@ -72,23 +72,17 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
                 optimizer.step()
             losses.append(loss.item())
             progress_bar_dict = {'mode': mode, 'loss': np.mean(losses)}
-            if 'clean' in config.name:
-                rev_losses.append(rev_loss.item())
-                clean_losses.append(clean_loss.item())
-                progress_bar_dict['rev_loss'] = np.mean(rev_losses)
-                progress_bar_dict['clean_loss'] = np.mean(clean_losses)
 
-            if mode == 'val':
-                mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
-                input_score = - metric(mixcat, clean_sep).squeeze()
-                output_score = - metric(logits, clean_sep).squeeze()
-                score = output_score - input_score
-                scores += score.tolist()
-                input_scores += input_score.tolist()
-                output_scores += output_score.tolist()
-                progress_bar_dict['input_score'] = np.mean(input_scores)
-                progress_bar_dict['output_score'] = np.mean(output_scores)
-                progress_bar_dict['score'] = np.mean(scores)
+            mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
+            input_score = - metric(mixcat, clean_sep).squeeze()
+            output_score = - metric(logits, clean_sep).squeeze()
+            score = output_score - input_score
+            scores += score.tolist()
+            input_scores += input_score.tolist()
+            output_scores += output_score.tolist()
+            progress_bar_dict['input_score'] = np.mean(input_scores)
+            progress_bar_dict['output_score'] = np.mean(output_scores)
+            progress_bar_dict['score'] = np.mean(scores)
             pbar.set_postfix(progress_bar_dict)
 
     writer.add_scalar(f'{mode}/loss', np.mean(losses), epoch)
