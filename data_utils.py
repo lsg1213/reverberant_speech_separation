@@ -1,3 +1,4 @@
+from json.encoder import py_encode_basestring
 import os
 import random
 
@@ -8,31 +9,8 @@ import torch
 from glob import glob
 from torch.utils.data import Dataset
 
-from utils import no_distance_models
-
 
 class LibriMix(Dataset):
-    """Dataset class for LibriMix source separation tasks.
-
-    Args:
-        csv_dir (str): The path to the metadata file.
-        task (str): One of ``'enh_single'``, ``'enh_both'``, ``'sep_clean'`` or
-            ``'sep_noisy'`` :
-
-            * ``'enh_single'`` for single speaker speech enhancement.
-            * ``'enh_both'`` for multi speaker speech enhancement.
-            * ``'sep_clean'`` for two-speaker clean source separation.
-            * ``'sep_noisy'`` for two-speaker noisy source separation.
-
-        sample_rate (int) : The sample rate of the sources and mixtures.
-        n_src (int) : The number of sources in the mixture.
-        segment (int, optional) : The desired sources and mixtures length in s.
-
-    References
-        [1] "LibriMix: An Open-Source Dataset for Generalizable Speech Separation",
-        Cosentino et al. 2020.
-    """
-
     dataset_name = "LibriMix"
 
     def __init__(
@@ -42,12 +20,6 @@ class LibriMix(Dataset):
         self.mode = csv_dir.split('/')[-1]
         csv_dir = os.path.join('/'.join(csv_dir.split('/')[:-1]), 'metadata/')
         self.csv_dir = csv_dir
-        if self.config.model != '':
-            prefix = task.split('_')[0]
-            dis_csv = glob(os.path.join(self.csv_dir, f'*{prefix}_metrics_{self.mode}*'))
-            if len(dis_csv) != 1:
-                raise ValueError('distance csv parsing was wrong')
-            self.dis_csv = pd.read_csv(dis_csv[0])
         self.task = task
         self.return_id = return_id
         # Get the csv corresponding to the task
@@ -86,7 +58,6 @@ class LibriMix(Dataset):
         # Get mixture path
         mixture_path = row["mixture_path"]
         self.mixture_path = mixture_path
-        sources_list = []
 
         # If there is a seg start point is set randomly
         if self.seg_len is not None:
@@ -96,26 +67,27 @@ class LibriMix(Dataset):
             start = 0
             stop = None
         # If task is enh_both then the source is the clean mixture
-        if "enh_both" in self.task:
-            mix_clean_path = self.df_clean.iloc[idx]["mixture_path"]
-            s, _ = sf.read(mix_clean_path, dtype="float32", start=start, stop=stop)
-            sources_list.append(s)
+        if "sep_clean" in self.task:
+            source_path1 = row["source_1_path"]
+            source_path2 = row["source_2_path"]
+            s1, _ = sf.read(source_path1, dtype="float32", start=start, stop=stop)
+            s2, _ = sf.read(source_path2, dtype="float32", start=start, stop=stop)
+            clean_sep = torch.from_numpy(np.stack([s1, s2], -1))
+            mixture = clean_sep.clone()
         else:
             # Read sources
             source_path = row["label_path"]
             s, _ = sf.read(source_path, dtype="float32", start=start, stop=stop)
             clean_sep = torch.from_numpy(s)
-        # Read the mixture
-        mixture, _ = sf.read(mixture_path, dtype="float32", start=start, stop=stop)
-        # Convert to torch tensor
-        mixture = torch.from_numpy(mixture)
+            # Read the mixture
+            mixture, _ = sf.read(mixture_path, dtype="float32", start=start, stop=stop)
+            # Convert to torch tensor
+            mixture = torch.from_numpy(mixture)
 
         outputs = (mixture, clean_sep)
         if self.return_id:
             id1, id2 = mixture_path.split("/")[-1].split(".")[0].split("_")
             outputs = outputs + ([id1, id2],)
-        if self.config.model not in no_distance_models:
-            outputs = outputs + (self.dis_csv.iloc[idx]['distance'],)
         if vars(self.config).get('t60') is not None:
             outputs = outputs + (torch.tensor(self.df.iloc[idx]['T60']).type(mixture.dtype),)
         return outputs

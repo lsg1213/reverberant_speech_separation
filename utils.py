@@ -3,9 +3,6 @@ import os
 import torch
 
 
-no_distance_models = ('', 'tas', 'dprnn', 'v1')
-
-
 def makedir(dirs):
     if not os.path.exists(dirs):
         os.makedirs(dirs, exist_ok=True)

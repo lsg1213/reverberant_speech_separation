@@ -9,7 +9,7 @@ def get_args(args: argparse.ArgumentParser = None):
     args.add_argument('--name', type=str, default='')
     args.add_argument('--datapath', type=str, default='/root/bigdatasets/librimix')
     args.add_argument('--speechnum', type=int, default=2, choices=[2, 3])
-    args.add_argument('--model', type=str, default='', choices=['', 'v1', 'v2', 'v3', 'tas', 'dprnn', 'dprnn_v1', 'tas_v1', 'test_v1','test_v2', 'test_v3'])
+    args.add_argument('--model', type=str, default='', choices=['', 'v1', 'v2', 'v3', 'tas', 'dprnn', 'dprnn_v1', 'dprnn_v2', 'dprnn_v3', 'tas_v1', 'tas_v2', 'test_v1','test_v2', 'test_v3', 'sepformer'])
     args.add_argument('--batch', type=int, default=16)
     args.add_argument('--task', type=str, default='rir')
     args.add_argument('--epoch', type=int, default=300)
@@ -24,5 +24,8 @@ def get_args(args: argparse.ArgumentParser = None):
     args.add_argument('--norm', type=bool, default=True)
     args.add_argument('--reverse', action='store_true')
     # args.add_argument('--norm', action='store_true')
-    return args.parse_args()
+    config = args.parse_args()
+    if 'lambdaloss' in config.name:
+        config.max_patience = 10
+    return config
     

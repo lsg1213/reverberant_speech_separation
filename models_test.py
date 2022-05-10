@@ -55,8 +55,7 @@ class Test:
         config.t60 = True
         self.make_testdataset(config)
         model = T60_ConvTasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance, t60 in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        for rev_sep, clean_sep, _, t60 in self.testset:
             t60 = t60[None].to(self.device).repeat((2))
             mix = rev_sep.sum(-1)[None].to(self.device).repeat((2,1))
 
@@ -71,8 +70,7 @@ class Test:
         config.t60 = True
         self.make_testdataset(config)
         model = T60_DPRNNTasNet_v1(config).to(self.device)
-        for rev_sep, clean_sep, _, distance, t60 in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        for rev_sep, clean_sep, _, t60 in self.testset:
             t60 = t60[None].to(self.device).repeat((2))
             mix = rev_sep.sum(-1)[None].to(self.device).repeat((2,1))
 
@@ -87,8 +85,7 @@ class Test:
         config.t60 = True
         self.make_testdataset(config)
         model = T60_ConvTasNet_v2(config).to(self.device)
-        for rev_sep, clean_sep, _, distance, t60 in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        for rev_sep, clean_sep, _, t60 in self.testset:
             t60 = t60[None].to(self.device).repeat((2))
             mix = rev_sep.sum(-1)[None].to(self.device).repeat((2,1))
 
@@ -103,13 +100,23 @@ class Test:
         config.t60 = True
         self.make_testdataset(config)
         model = T60_ConvTasNet_v3(config).to(self.device)
-        for rev_sep, clean_sep, _, distance, t60 in self.testset:
-            distance = torch.from_numpy(distance[None]).to(self.device)
+        for rev_sep, clean_sep, _, t60 in self.testset:
             t60 = t60[None].to(self.device).repeat((2))
             mix = rev_sep.sum(-1)[None].to(self.device).repeat((2,1))
 
             dereverb_results = model(mix, t60=t60)
             assert dereverb_results.shape == clean_sep[None].transpose(-2,-1).repeat((2,1,1)).shape
+
+    def test_Sepformer(self):
+        config = deepcopy(self.config)
+        config.task = 'rir'
+        config.model = 'Sepformer'
+        self.make_testdataset(config)
+        model = Sepformer(self.config).to(self.device)
+        for rev_sep, clean_sep, _ in self.testset:
+            mix = rev_sep.sum(-1)[None].to(self.device)
+            results = model(mix)
+            assert results.shape == clean_sep[None].transpose(-2,-1).shape
 
     def run(self) -> None:
         functions = [i for i in dir(self) if 'test_' in i]

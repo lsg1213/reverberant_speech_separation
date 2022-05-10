@@ -8,7 +8,7 @@ from tqdm import tqdm
 from numpy import mean, ndarray
 import soundfile as sf
 
-from utils import get_device, makedir, no_distance_models
+from utils import get_device, makedir
 
 
 def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
@@ -28,19 +28,14 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
             for inputs in pbar:
                 t60 = None
-                if config.model in no_distance_models:
-                    mix, clean, idx = inputs
-                else:
-                    if len(inputs) == 4:
-                        mix, clean, idx, distance = inputs
-                    elif len(inputs) == 5:
-                        mix, clean, idx, distance, t60 = inputs
-                        t60 = t60[None].to(device)
-                    if not isinstance(distance, torch.Tensor):
-                        if not isinstance(distance, ndarray):
-                            distance = distance[None]
-                        distance = torch.from_numpy(distance)
-                    distance = distance.to(device)
+                if len(inputs) == 4:
+                    mix, clean, idx, t60 = inputs
+                    t60 = t60[None].to(device)
+                if not isinstance(distance, torch.Tensor):
+                    if not isinstance(distance, ndarray):
+                        distance = distance[None]
+                    distance = torch.from_numpy(distance)
+                distance = distance.to(device)
                 rev_sep = mix[None].to(device).transpose(1,2)
                 clean_sep = clean[None].to(device).transpose(1,2)
                 if dereverb:
@@ -74,12 +69,8 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                             logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
                             mix = logits.clone().detach().sum(1)
 
-                elif config.model in no_distance_models:
-                    logits = model(mix, test=True)
-                    logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
-                else:
-                    logits = model(mix, distance=distance, t60=t60, test=True)
-                    logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
+                logits = model(mix, t60=t60, test=True)
+                logits = logits * mix_std.unsqueeze(1) + mix_mean.unsqueeze(1)
 
                 si_snr = criterion(logits, clean_sep, return_est=True if 'rir' not in dataset.task else False)
                 input_si_snr = criterion(mixcat, clean_sep)

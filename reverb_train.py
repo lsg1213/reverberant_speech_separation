@@ -17,9 +17,10 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from tqdm import tqdm
+import speechbrain as sb
 
 from data_utils import LibriMix
-from utils import makedir, get_device, no_distance_models, clip_grad_norm_
+from utils import makedir, get_device, clip_grad_norm_
 from callbacks import EarlyStopping, Checkpoint
 from evals import evaluate
 from models import *
@@ -38,11 +39,7 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     output_scores = []
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
-            if config.model in no_distance_models:
-                mix, clean = inputs
-            else:
-                mix, clean, distance = inputs
-                distance = distance.to(device)
+            mix, clean = inputs
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
             mix = rev_sep.sum(1)
@@ -120,7 +117,9 @@ def get_model(config):
     elif config.model == 'tas':
         model = TasNet()
     elif config.model == 'dprnn':
-        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=1500)
+        model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=100)
+    elif config.model == 'sepformer':
+        model = Sepformer(config)
     return model
 
 

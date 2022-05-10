@@ -1,6 +1,6 @@
 from argparse import ArgumentError
 import argparse
-from ast import Lambda
+import json
 import os
 from asteroid import DPRNNTasNet
 
@@ -25,7 +25,7 @@ torch.backends.cudnn.benchmark = False
 np.random.seed(3000)
 
 from data_utils import LibriMix
-from utils import makedir, get_device, no_distance_models
+from utils import makedir, get_device
 from callbacks import EarlyStopping, Checkpoint
 from t60_eval import evaluate
 from t60_utils import *
@@ -59,12 +59,8 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
     with tqdm(dataloader) as pbar:
         for inputs in pbar:
             progress_bar_dict = {}
-            if config.model == no_distance_models:
-                mix, clean = inputs
-            else:
-                mix, clean, distance, t60 = inputs
-                distance = distance.to(device)
-                t60 = t60.to(device)
+            mix, clean, t60 = inputs
+            t60 = t60.to(device)
             rev_sep = mix.to(device).transpose(1,2)
             clean_sep = clean.to(device).transpose(1,2)
             cleanmix = clean_sep.sum(1)
@@ -218,19 +214,31 @@ def get_model(config):
             model = getattr(models, modelname)(config, sample_rate=config.sr, chunk_size=100)
         else:
             model = DPRNNTasNet(config.speechnum, sample_rate=config.sr, chunk_size=100)
+        if config.recursive or config.recursive2:
+            if 'v1' in config.model:
+                resume = torch.load('save/t60_T60_dprnn_v1_32_rir_norm_sisdr_100_lambda2/best.pt')['model']
+            elif 'v2' in config.model:
+                resume = torch.load('save/t60_T60_dprnn_v2_32_rir_norm_sisdr_100_lambda2/best.pt')['model']
+            model.load_state_dict(resume)
     elif 'tas' in config.model:
         modelname = 'T60_TasNet'
         if len(splited_name) > 2:
             modelname += '_' + splited_name[-1]
             model = getattr(models, modelname)()
         if config.recursive or config.recursive2:
-            resume = torch.load('save/t60_T60_tas_v1_32_rir_norm_sisdr_lambda2/best.pt')['model']
+            if 'v1' in config.model:
+                resume = torch.load('save/t60_T60_tas_v1_32_rir_norm_sisdr_lambda2/best.pt')['model']
+            elif 'v2' in config.model:
+                resume = torch.load('save/t60_T60_tas_v2_32_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     else:
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
         if config.recursive or config.recursive2:
-            resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
+            if 'v1' in config.model:
+                resume = torch.load('save/t60_T60_v1_16_rir_norm_sisdr_lambda2/best.pt')['model']
+            elif 'v2' in config.model:
+                resume = torch.load('save/t60_T60_v2_16_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
     return model
 
@@ -268,6 +276,9 @@ def main(config):
     device = get_device()
     makedir(config.tensorboard_path)
     makedir(savepath)
+
+    with open(os.path.join(savepath, 'config.json'), 'w') as f:
+        json.dump(vars(config), f)
 
     init_epoch = 0
     final_epoch = 0
@@ -340,7 +351,7 @@ def main(config):
         resume = torch.load(os.path.join(savepath, 'best.pt'))
         model.load_state_dict(resume['model'])
         model = model.to(device)
-        optimizer.load_state_dict(resume['optimizer'])
+        # optimizer.load_state_dict(resume['optimizer'])
         scheduler.load_state_dict(resume['scheduler'])
         init_epoch = resume['epoch']
         for callback in callbacks:

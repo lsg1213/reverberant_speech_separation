@@ -37,7 +37,7 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
     with torch.no_grad():
         with tqdm(dataset) as pbar: # 데이터마다 길이가 달라서 dataloader 사용 불가
             for inputs in pbar:
-                mix, clean, idx, distance, t60 = inputs
+                mix, clean, idx, t60 = inputs
                 t60 = t60[None].to(device)
                 if 'lambda' in config.name:
                     lambda_val = []
