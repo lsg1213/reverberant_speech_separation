@@ -76,6 +76,10 @@ def iterloop(config, writer, epoch, model, criterion, dataloader, metric, optimi
             mixcat = rev_sep.sum(1, keepdim=True).repeat((1,2,1))
             input_score = - metric(mixcat, clean_sep).squeeze()
             output_score = - metric(logits, clean_sep).squeeze()
+            if isinstance(output_score.tolist(), float):
+                output_score = output_score.unsqueeze(0)
+                input_score = input_score.unsqueeze(0)
+            
             score = output_score - input_score
             scores += score.tolist()
             input_scores += input_score.tolist()
@@ -146,7 +150,7 @@ def main(config):
     train_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/train-360'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -155,7 +159,7 @@ def main(config):
     val_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/dev'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=config.segment,
@@ -164,7 +168,7 @@ def main(config):
     test_set = LibriMix(
         csv_dir=os.path.join(config.datapath, 'Libri2Mix/wav8k/min/test'),
         config=config,
-        task=config.task + 'sep_clean',
+        task=config.task[:-1],
         sample_rate=config.sr,
         n_src=config.speechnum,
         segment=None,
