@@ -232,6 +232,17 @@ def get_model(config):
             elif 'v2' in config.model:
                 resume = torch.load('save/t60_T60_tas_v2_32_rir_norm_sisdr_lambda2/best.pt')['model']
             model.load_state_dict(resume)
+    elif 'sepformer' in config.model:
+        modelname = 'T60_Sepformer'
+        if len(splited_name) > 2:
+            modelname += '_' + splited_name[-1]
+            model = getattr(models, modelname)(config)
+        if config.recursive or config.recursive2:
+            if 'v1' in config.model:
+                raise ValueError('unimplementation')
+            elif 'v2' in config.model:
+                raise ValueError('unimplementation')
+            model.load_state_dict(resume)
     else:
         modelname = 'T60_ConvTasNet_' + splited_name[-1]
         model = getattr(models, modelname)(config)
