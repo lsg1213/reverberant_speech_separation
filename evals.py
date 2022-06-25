@@ -31,11 +31,8 @@ def evaluate(config, model, dataset, savepath, epoch, dereverb=False):
                 if len(inputs) == 4:
                     mix, clean, idx, t60 = inputs
                     t60 = t60[None].to(device)
-                if not isinstance(distance, torch.Tensor):
-                    if not isinstance(distance, ndarray):
-                        distance = distance[None]
-                    distance = torch.from_numpy(distance)
-                distance = distance.to(device)
+                elif len(inputs) == 3:
+                    mix, clean, idx = inputs
                 rev_sep = mix[None].to(device).transpose(1,2)
                 clean_sep = clean[None].to(device).transpose(1,2)
                 if dereverb:

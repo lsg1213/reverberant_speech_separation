@@ -239,7 +239,7 @@ def get_model(config):
             model = getattr(models, modelname)(config)
         if config.recursive or config.recursive2:
             if 'v1' in config.model:
-                raise ValueError('unimplementation')
+                resume = torch.load('save/t60_T60_sepformer_v1_4_rir_norm_sisdr_lambda2/best.pt')['model']
             elif 'v2' in config.model:
                 raise ValueError('unimplementation')
             model.load_state_dict(resume)
@@ -424,6 +424,7 @@ def main(config):
         print('---------------------------------------------')
     resume = torch.load(os.path.join(savepath, 'best.pt'))
     model = get_model(config)
+    import pdb; pdb.set_trace()
     model.load_state_dict(resume['model'])
     model = model.to(device)
     si_sdri, si_snri = evaluate(config, model, test_set, savepath, '')
